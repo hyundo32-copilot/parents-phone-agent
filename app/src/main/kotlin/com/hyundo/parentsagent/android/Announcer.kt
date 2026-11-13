@@ -9,7 +9,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** TTS 한 줄 안내. 한국어 음성이 없거나 초기화 전이면 말하지 못하고 false를 돌려준다. */
-class Announcer(context: Context) {
+class Announcer(context: Context) : Speaker {
     @Volatile private var ready = false
     private val pending = HashMap<String, CountDownLatch>()
     private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status ->
@@ -37,7 +37,9 @@ class Announcer(context: Context) {
     }
 
     /** 말하고 끝날 때까지(최대 [maxWaitMs]) 기다린다. 말하지 못했으면 false. 백그라운드 스레드에서 호출. */
-    fun speakAndWait(text: String, maxWaitMs: Long = 6_000): Boolean {
+    override fun speakAndWait(text: String): Boolean = speakAndWait(text, 6_000)
+
+    fun speakAndWait(text: String, maxWaitMs: Long): Boolean {
         if (!ready) return false
         val id = "u" + System.nanoTime()
         val latch = CountDownLatch(1)
@@ -51,7 +53,7 @@ class Announcer(context: Context) {
         return true
     }
 
-    fun speak(text: String): Boolean {
+    override fun speak(text: String): Boolean {
         if (!ready) return false
         return tts.speak(text, TextToSpeech.QUEUE_ADD, Bundle(), "u" + System.nanoTime()) == TextToSpeech.SUCCESS
     }

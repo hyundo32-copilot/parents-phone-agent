@@ -12,7 +12,7 @@ import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.SettingValue
 
 /** 현재 설정값을 읽는다. 값만 읽고 메시지·통화·연락처 내용은 건드리지 않는다. */
-class SettingsReader(context: Context) {
+class SettingsReader(context: Context) : DeviceReader {
     private val ctx = context.applicationContext
     private val audio = ctx.getSystemService(AudioManager::class.java)
     private val nm = ctx.getSystemService(NotificationManager::class.java)
@@ -31,7 +31,7 @@ class SettingsReader(context: Context) {
      *   다른 앱의 알림 허용 여부를 읽는 공개 API가 없어서다. 부모님이 폰을 쓰는 중에 설정 화면이
      *   튀어나오지 않도록 주기 점검에서는 false (알림 항목은 Unknown → 비교 제외).
      */
-    fun readAll(deep: Boolean): Map<SettingKey, SettingValue> =
+    override fun readAll(deep: Boolean): Map<SettingKey, SettingValue> =
         SettingKey.entries.associateWith { read(it, deep) }
 
     fun read(key: SettingKey, deep: Boolean): SettingValue = try {
@@ -75,10 +75,21 @@ class SettingsReader(context: Context) {
         SettingValue.Unknown
     }
 
-    /** 해외 로밍 여부. 모르면 false. */
-    fun isRoaming(): Boolean = try {
-        ctx.getSystemService(TelephonyManager::class.java)?.isNetworkRoaming == true
+    /**
+     * 해외 로밍 여부. 비행기 모드 중이거나 SIM·서비스가 없어 모르면 UNKNOWN (로밍일 수 있음으로 취급).
+     * 비행기 모드에서는 isNetworkRoaming 이 false로 나오므로 그 값을 믿으면 안 된다.
+     */
+    override fun roamingState(): RoamingState = try {
+        val airplane = Settings.Global.getInt(ctx.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
+        val tm = ctx.getSystemService(TelephonyManager::class.java)
+        when {
+            airplane || tm == null -> RoamingState.UNKNOWN
+            tm.simState != TelephonyManager.SIM_STATE_READY -> RoamingState.UNKNOWN
+            tm.networkOperator.isNullOrEmpty() -> RoamingState.UNKNOWN // 서비스 없음
+            tm.isNetworkRoaming -> RoamingState.ROAMING
+            else -> RoamingState.HOME
+        }
     } catch (e: Exception) {
-        false
+        RoamingState.UNKNOWN
     }
 }

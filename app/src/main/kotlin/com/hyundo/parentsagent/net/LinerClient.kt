@@ -5,7 +5,10 @@ import java.io.IOException
 
 class NotConfiguredException(what: String) : IOException("$what 설정이 비어 있습니다 (local.properties)")
 class RateLimitedException : IOException("Liner 속도 제한(429)이 계속됩니다")
-class HttpStatusException(val code: Int) : IOException("HTTP $code")
+class HttpStatusException(val code: Int, val retryAfterSec: Long? = null) : IOException("HTTP $code") {
+    /** 다시 보내도 소용없는 오류: 챗 ID 오타(400)·토큰 폐기(401)·봇 차단(403) 등. 429는 기다리면 풀리므로 제외. */
+    val permanent: Boolean get() = code in 400..499 && code != 429
+}
 
 /** Liner 모델 API. 증상 분류와 에스컬레이션 요약만 한다. 조작 결정에는 쓰지 않는다. */
 class LinerClient(

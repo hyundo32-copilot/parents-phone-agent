@@ -120,6 +120,16 @@ class MainActivity : android.app.Activity() {
         }
         content.addView(Ui.button(c, "지금 이 상태를 기준으로 찍기") { confirmSnapshot() })
 
+        // --- 자동 복원이 멈춘 항목 ---
+        val pausedKeys = store.history().pausedKeys()
+        if (pausedKeys.isNotEmpty()) {
+            content.addView(Ui.text(c, "자동 복원 멈춘 항목", 24f, bold = true))
+            content.addView(Ui.text(c, "같은 이탈이 3일 연속 반복돼 멈췄어요. 원인을 확인한 뒤 다시 켜 주세요.", 18f))
+            pausedKeys.forEach { k ->
+                content.addView(Ui.button(c, "${k.label} 다시 자동 복원", "#2E7D32") { resumeAutoRestore(listOf(k)) })
+            }
+        }
+
         // --- 점검 / 증상 ---
         content.addView(Ui.text(c, "점검", 24f, bold = true))
         content.addView(Ui.button(c, "지금 점검하기") { startCheck(Trigger.MANUAL, null) })
@@ -159,6 +169,17 @@ class MainActivity : android.app.Activity() {
         content.addView(Ui.text(c, "Liner 키 ${if (AppConfig.linerApiKey.isBlank()) "없음" else "있음"} · 텔레그램 ${if (AppConfig.telegramBotToken.isBlank() || AppConfig.telegramChatId.isBlank()) "없음" else "있음"}", 14f))
     }
 
+    /** 멈춘 항목을 다시 켠다. 점검과 같은 실행 줄(executor)에서 해서 진행 중인 점검의 기록 저장과 엇갈리지 않게 한다. */
+    private fun resumeAutoRestore(keys: List<SettingKey>) {
+        AgentRuntime.async {
+            val h = store.history()
+            keys.forEach { h.resume(it) }
+            store.saveHistory(h)
+            store.appendLog("자동 복원을 다시 켰어요: " + keys.joinToString(", ") { it.label })
+            runOnUiThread { render(); toast("다시 자동으로 고칠게요") }
+        }
+    }
+
     private fun confirmSnapshot() {
         val nightStart = EditText(this).apply { setText(hm(Snapshot.DEFAULT_NIGHT_START)); inputType = InputType.TYPE_CLASS_DATETIME; textSize = 22f }
         val nightEnd = EditText(this).apply { setText(hm(Snapshot.DEFAULT_NIGHT_END)); inputType = InputType.TYPE_CLASS_DATETIME; textSize = 22f }
@@ -178,6 +199,10 @@ class MainActivity : android.app.Activity() {
                     // 알림 설정은 접근성으로 화면을 열어 읽는다 (deep)
                     val cur = AgentRuntime.reader.readAll(deep = true)
                     store.saveSnapshot(Snapshot.capture(cur, System.currentTimeMillis(), ns, ne))
+                    // 기준을 새로 찍었으면 이전 이탈 기록은 의미가 없다 → 멈춤 전부 해제
+                    val h = store.history()
+                    h.resumeAll()
+                    store.saveHistory(h)
                     store.appendLog("기준 상태를 새로 찍었어요")
                     runOnUiThread { render(); toast("기준을 저장했어요") }
                 }

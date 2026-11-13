@@ -13,8 +13,8 @@ class HeartbeatTest {
 
     private class Mem(var last: LocalDate? = null)
 
-    private fun sender(t: FakeTransport, mem: Mem, token: String = "TOKEN") =
-        HeartbeatSender(TelegramClient(token, "CHAT", t), hour, { mem.last }, { mem.last = it })
+    private fun sender(t: FakeTransport, mem: Mem, token: String = "TOKEN", healthy: () -> Boolean = { true }) =
+        HeartbeatSender(TelegramClient(token, "CHAT", t), hour, { mem.last }, { mem.last = it }, healthy)
 
     private fun sentText(t: FakeTransport, i: Int = 0) = JSONObject(t.calls[i].body).getString("text")
 
@@ -101,6 +101,38 @@ class HeartbeatTest {
         repeat(3) { assertEquals(HeartbeatOutcome.DEFERRED, s.trySend(at(2026, 11, 13, 9 + it, 5))) }
         assertEquals(HeartbeatOutcome.SENT_DELAYED, s.trySend(at(2026, 11, 13, 12)))
         assertEquals(HeartbeatOutcome.NOT_DUE, s.trySend(at(2026, 11, 13, 13)))
+    }
+
+    // --- 건강 게이트 (접근성이 꺼지면 심박이 끊겨야 현도가 안다) ---
+
+    @Test fun `건강하지 않으면 전송 호출도 기록도 없다`() {
+        val t = FakeTransport(mutableListOf())
+        val mem = Mem(LocalDate.of(2026, 11, 12))
+        assertEquals(HeartbeatOutcome.UNHEALTHY, sender(t, mem, healthy = { false }).trySend(at(2026, 11, 13, 9, 1)))
+        assertTrue(t.calls.isEmpty())
+        assertEquals(LocalDate.of(2026, 11, 12), mem.last)
+    }
+
+    @Test fun `접근성이 꺼진 동안 며칠이 지나도 심박은 안 나간다`() {
+        val t = FakeTransport(mutableListOf())
+        val s = sender(t, Mem(), healthy = { false })
+        repeat(3) { assertEquals(HeartbeatOutcome.UNHEALTHY, s.trySend(at(2026, 11, 13 + it, 9, 5))) }
+        assertTrue(t.calls.isEmpty())
+    }
+
+    @Test fun `다시 건강해지면 한 통만 지연됨으로 나간다`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        var healthy = false
+        val s = sender(t, Mem(), healthy = { healthy })
+        assertEquals(HeartbeatOutcome.UNHEALTHY, s.trySend(at(2026, 11, 13, 9, 5)))
+        healthy = true
+        assertEquals(HeartbeatOutcome.SENT_DELAYED, s.trySend(at(2026, 11, 13, 15)))
+        assertEquals(1, t.calls.size)
+    }
+
+    @Test fun `건강하면 기존처럼 정상 전송`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        assertEquals(HeartbeatOutcome.SENT, sender(t, Mem(), healthy = { true }).trySend(at(2026, 11, 13, 9, 1)))
     }
 
     @Test fun `텔레그램 설정이 비면 호출 없이 보류`() {

@@ -22,7 +22,18 @@ class TelegramClient(
             body,
             timeoutMs,
         )
-        if (res.code !in 200..299) throw HttpStatusException(res.code)
+        if (res.code !in 200..299) throw HttpStatusException(res.code, if (res.code == 429) retryAfterSec(res) else null)
+    }
+
+    /** 429 응답의 대기 시간(초). 헤더 Retry-After 또는 본문 parameters.retry_after. */
+    private fun retryAfterSec(res: HttpResponse): Long? {
+        res.header("Retry-After")?.trim()?.toLongOrNull()?.let { return it }
+        return try {
+            val v = JSONObject(res.body).optJSONObject("parameters")?.optLong("retry_after", -1L) ?: -1L
+            if (v >= 0) v else null
+        } catch (e: Exception) {
+            null
+        }
     }
 
     companion object {

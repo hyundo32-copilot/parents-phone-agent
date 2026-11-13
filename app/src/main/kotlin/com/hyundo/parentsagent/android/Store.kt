@@ -11,10 +11,10 @@ import java.time.LocalDate
 data class LogEntry(val timeMillis: Long, val text: String)
 
 /** 기기 안(SharedPreferences)에만 저장한다. 백업도 끈 상태(allowBackup=false). */
-class Store(context: Context) {
+class Store(context: Context) : CheckStore {
     private val p = context.applicationContext.getSharedPreferences("agent", Context.MODE_PRIVATE)
 
-    var consented: Boolean
+    override var consented: Boolean
         get() = p.getBoolean("consented", false)
         set(v) = p.edit().putBoolean("consented", v).apply()
 
@@ -22,7 +22,7 @@ class Store(context: Context) {
         get() = p.getBoolean("demoMode", false)
         set(v) = p.edit().putBoolean("demoMode", v).apply()
 
-    var lastCheckMillis: Long
+    override var lastCheckMillis: Long
         get() = p.getLong("lastCheck", 0L)
         set(v) = p.edit().putLong("lastCheck", v).apply()
 
@@ -31,17 +31,19 @@ class Store(context: Context) {
         get() = p.getString("hbSlot", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         set(v) = p.edit().putString("hbSlot", v?.toString()).apply()
 
-    fun snapshot(): Snapshot? = p.getString("snapshot", null)?.let { runCatching { Snapshot.fromJson(it) }.getOrNull() }
+    override fun snapshot(): Snapshot? = p.getString("snapshot", null)?.let { runCatching { Snapshot.fromJson(it) }.getOrNull() }
     fun saveSnapshot(s: Snapshot) = p.edit().putString("snapshot", s.toJson()).apply()
 
-    @Synchronized fun history(): RestoreHistory = RestoreHistory.fromJson(p.getString("history", null))
-    @Synchronized fun saveHistory(h: RestoreHistory) =
+    @Synchronized override fun history(): RestoreHistory = RestoreHistory.fromJson(p.getString("history", null))
+    @Synchronized override fun saveHistory(h: RestoreHistory) =
         p.edit().putString("history", h.toJson(LocalDate.now())).apply()
 
     @Synchronized fun outbox(): Outbox = Outbox(p.getString("outbox", null))
     @Synchronized fun saveOutbox(o: Outbox) = p.edit().putString("outbox", o.toJson()).apply()
 
-    @Synchronized fun appendLog(text: String, nowMillis: Long = System.currentTimeMillis()) {
+    override fun appendLog(text: String) = appendLog(text, System.currentTimeMillis())
+
+    @Synchronized fun appendLog(text: String, nowMillis: Long) {
         val arr = JSONArray(p.getString("log", "[]"))
         arr.put(JSONObject().put("t", nowMillis).put("x", text))
         val trimmed = JSONArray()

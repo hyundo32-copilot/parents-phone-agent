@@ -10,12 +10,12 @@ import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.SettingValue
 
 /** A등급 복원 수단 실행. 판정(할지 말지)은 RestorePolicy가 하고, 여기서는 방법만 안다. */
-class Restorer(context: Context, private val reader: SettingsReader, private val deep: Boolean) {
+class Restorer(context: Context, private val reader: SettingsReader, private val deep: Boolean) : RestoreExecutor {
     private val ctx = context.applicationContext
     private val audio = ctx.getSystemService(AudioManager::class.java)
     private val nm = ctx.getSystemService(NotificationManager::class.java)
 
-    fun restore(dev: Deviation): RestoreAttempt {
+    override fun restore(dev: Deviation): RestoreAttempt {
         val before = dev.actual
         val (method, attempted) = try {
             apply(dev)
@@ -40,7 +40,7 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
         return when (dev.key) {
             SettingKey.RINGER_MODE -> {
                 // 실기 확인 필요: 방해금지 중에는 알림 정책 접근 없이 링어 모드를 못 바꿀 수 있음
-                audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                audio.ringerMode = ringerModeFor((dev.expected as SettingValue.Mode).name)
                 "일반 API (벨소리 모드)" to true
             }
             SettingKey.VOLUME_RING -> {
@@ -65,6 +65,15 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
                 }
             }
             SettingKey.SIM_READY -> "자동 복원 대상 아님" to false
+        }
+    }
+
+    companion object {
+        /** 기준의 벨소리 모드 이름을 AudioManager 상수로. 기준이 진동이면 진동으로 되돌린다 (원칙 1: 기준이 먼저다). */
+        fun ringerModeFor(name: String): Int = when (name) {
+            "VIBRATE" -> AudioManager.RINGER_MODE_VIBRATE
+            "SILENT" -> AudioManager.RINGER_MODE_SILENT
+            else -> AudioManager.RINGER_MODE_NORMAL
         }
     }
 

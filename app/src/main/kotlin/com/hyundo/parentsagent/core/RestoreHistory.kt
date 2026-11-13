@@ -42,6 +42,8 @@ class RestoreHistory {
         paused -= key
         deviationDays.remove(key)
     }
+    /** 기준을 새로 찍으면 멈춘 항목을 전부 푼다. */
+    fun resumeAll() { pausedKeys().forEach { resume(it) } }
     fun isPaused(key: SettingKey): Boolean = key in paused
     fun pausedKeys(): Set<SettingKey> = paused.toSet()
 

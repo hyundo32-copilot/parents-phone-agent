@@ -1,6 +1,5 @@
 package com.hyundo.parentsagent.android
 
-import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
 import com.hyundo.parentsagent.core.SettingKey
@@ -14,7 +13,6 @@ import com.hyundo.parentsagent.core.SettingValue
 class FaultInjector(context: Context, private val reader: SettingsReader) {
     private val ctx = context.applicationContext
     private val audio = ctx.getSystemService(AudioManager::class.java)
-    private val nm = ctx.getSystemService(NotificationManager::class.java)
 
     fun airplaneOn(): String {
         val s = AgentAccessibilityService.instance ?: return "접근성 서비스가 꺼져 있어요"
@@ -30,10 +28,8 @@ class FaultInjector(context: Context, private val reader: SettingsReader) {
     }
 
     fun dnd(): String {
-        if (nm.isNotificationPolicyAccessGranted) {
-            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
-            if (reader.read(SettingKey.DND, false) == SettingValue.Flag(true)) return "방해금지를 켰어요"
-        }
+        // setInterruptionFilter 는 쓰지 않는다: Android 15+(targetSdk 35+)에서는 전역 방해금지가 아니라
+        // 앱 자기 규칙만 켜서, 부모님이 직접 켠 방해금지와 다른 상태가 된다. 접근성 타일로 실제처럼 켠다.
         val s = AgentAccessibilityService.instance ?: return "접근성 서비스가 꺼져 있어요"
         val ok = s.toggleTile(Tile.DND) { reader.read(SettingKey.DND, false) == SettingValue.Flag(true) }
         return if (ok) "방해금지를 켰어요" else "방해금지를 못 켰어요 (실기 확인 필요)"
