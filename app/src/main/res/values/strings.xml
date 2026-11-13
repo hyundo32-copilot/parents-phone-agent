@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">폰 도우미</string>
+    <string name="accessibility_description">부모님 폰의 설정이 잘못 바뀌었을 때, 기준 상태로 되돌리기 위해 설정 화면의 버튼을 대신 눌러 줍니다. 문자·통화 내용, 사진, 연락처는 읽지 않습니다.</string>
+</resources>

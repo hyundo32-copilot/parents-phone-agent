@@ -1,0 +1,7 @@
+# 이 파일을 local.properties 로 복사해 채운다. local.properties 는 .gitignore 처리돼 있다.
+sdk.dir=/path/to/android-sdk
+# Liner 모델 API 키 (증상 분류·에스컬레이션 요약). 비워도 빌드·동작은 된다(규칙 엔진 원문만 사용).
+liner.api.key=
+# 텔레그램 봇 토큰, 현도의 챗 ID. 비우면 에스컬레이션 전송이 대기열에만 쌓인다.
+telegram.bot.token=
+telegram.chat.id=
