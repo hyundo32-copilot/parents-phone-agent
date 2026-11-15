@@ -2,12 +2,15 @@ package com.hyundo.parentsagent.android
 
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.provider.Settings
 import com.hyundo.parentsagent.core.AttemptResult
 import com.hyundo.parentsagent.core.Deviation
 import com.hyundo.parentsagent.core.RestoreAttempt
 import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.SettingValue
+import com.hyundo.parentsagent.core.Settle
 
 /** A등급 복원 수단 실행. 판정(할지 말지)은 RestorePolicy가 하고, 여기서는 방법만 안다. */
 class Restorer(context: Context, private val reader: SettingsReader, private val deep: Boolean) : RestoreExecutor {
@@ -24,7 +27,12 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
         } catch (e: Exception) {
             "오류" to false
         }
-        val after = reader.read(dev.key, deep)
+        // 와이파이는 스위치를 켠 뒤 전파가 올라올 때까지 isWifiEnabled 가 false라서, 바로 읽으면 고쳐졌는데도 실패로 본다.
+        val after = if (attempted && dev.key in SETTLE_KEYS) {
+            Settle.await(dev.expected, { reader.read(dev.key, deep) }, Thread::sleep, { StopController.requested })
+        } else {
+            reader.read(dev.key, deep)
+        }
         val result = when {
             StopController.requested && !dev.expected.matches(after) -> AttemptResult.STOPPED_BY_USER
             dev.expected.matches(after) -> AttemptResult.SUCCESS
@@ -69,6 +77,9 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
     }
 
     companion object {
+        /** 값이 바뀌는 데 시간이 걸려 복원 직후 재읽기를 기다려야 하는 항목. 나머지는 설정값이 동기적으로 바뀐다. */
+        private val SETTLE_KEYS = setOf(SettingKey.WIFI)
+
         /** 기준의 벨소리 모드 이름을 AudioManager 상수로. 기준이 진동이면 진동으로 되돌린다 (원칙 1: 기준이 먼저다). */
         fun ringerModeFor(name: String): Int = when (name) {
             "VIBRATE" -> AudioManager.RINGER_MODE_VIBRATE
@@ -89,7 +100,21 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
     private fun tile(service: AgentAccessibilityService?, tile: Tile, key: SettingKey, want: Boolean?): Pair<String, Boolean> {
         val label = "접근성 빠른 설정 탭"
         if (service == null || want == null) return label to false
-        service.toggleTile(tile) { reader.read(key, false) == SettingValue.Flag(want) }
-        return label to true
+        if (service.toggleTile(tile) { reader.read(key, false) == SettingValue.Flag(want) }) return label to true
+        // 빠른 설정 타일이 안 되면 설정 화면의 스위치로 시도한다 (One UI 9.0 실기에서 타일 실패 확인).
+        val (intent, labels) = settingsFallback(key) ?: return label to true
+        val r = service.setSwitchInSettings(intent, labels, want, singlePurpose = key == SettingKey.AIRPLANE_MODE)
+        // 비행기 모드만 전용 페이지(스위치 1개)라 단일 스위치 폴백을 허용한다. 와이파이·데이터·방해금지는 스위치가 여럿이다.
+        // 못 찾았거나 못 눌렀으면 실행한 게 아니다. 사유를 남겨야 실기 로그로 원인을 알 수 있다.
+        return "접근성 설정 화면 스위치 (${r.describe()})" to r.outcome.executed
+    }
+
+    /** 타일이 안 될 때 설정 화면으로 여는 차선책. 없으면 null. */
+    private fun settingsFallback(key: SettingKey): Pair<Intent, List<String>>? = when (key) {
+        SettingKey.AIRPLANE_MODE -> Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS) to listOf("비행기 모드", "Airplane mode")
+        SettingKey.WIFI -> Intent(Settings.ACTION_WIFI_SETTINGS) to listOf("Wi-Fi", "와이파이")
+        SettingKey.MOBILE_DATA -> Intent(Settings.ACTION_WIRELESS_SETTINGS) to listOf("모바일 데이터", "Mobile data")
+        SettingKey.DND -> Intent("android.settings.ZEN_MODE_SETTINGS") to listOf("방해 금지", "Do not disturb")
+        else -> null
     }
 }

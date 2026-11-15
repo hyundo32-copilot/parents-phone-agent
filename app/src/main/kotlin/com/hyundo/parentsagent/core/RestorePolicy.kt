@@ -37,6 +37,8 @@ data class PolicyContext(
     /** 이번 점검에서 이미 시도한 복원 횟수. */
     val attemptsThisRun: Int,
     val maxAttemptsPerRun: Int = MAX_ATTEMPTS_PER_RUN,
+    /** 수동 점검("지금 점검하기")이면 일일·점검당 횟수 제한을 적용하지 않는다. */
+    val manual: Boolean = false,
 ) {
     companion object {
         const val MAX_ATTEMPTS_PER_RUN = 3
@@ -73,10 +75,10 @@ class RestorePolicy(private val history: RestoreHistory) {
         if (key == SettingKey.MOBILE_DATA && ctx.roaming) {
             return Decision.Skip(dev, SkipReason.ROAMING_DATA, notify = true)
         }
-        if (history.restoreCount(key, today) >= DAILY_RESTORE_LIMIT) {
+        if (!ctx.manual && history.restoreCount(key, today) >= DAILY_RESTORE_LIMIT) {
             return Decision.Skip(dev, SkipReason.DAILY_LIMIT, notify = true)
         }
-        if (ctx.attemptsThisRun >= ctx.maxAttemptsPerRun) {
+        if (!ctx.manual && ctx.attemptsThisRun >= ctx.maxAttemptsPerRun) {
             return Decision.Skip(dev, SkipReason.RUN_LIMIT, notify = true)
         }
         return Decision.Restore(dev)

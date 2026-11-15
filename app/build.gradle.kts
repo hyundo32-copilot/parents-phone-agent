@@ -30,6 +30,22 @@ android {
         buildConfigField("String", "TELEGRAM_CHAT_ID", "\"${secret("telegram.chat.id")}\"")
     }
 
+    // debug 서명 키 고정: 기본 debug keystore는 VM 임시 영역(/root)에 생겨 VM 교체 때 날아가고, 키가 바뀌면 기존 설치 앱 위에 업데이트 설치가 안 된다. 프로젝트 내 debug.keystore(홈에 남아 VM 교체에도 유지, .gitignore로 커밋 제외)를 쓴다.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

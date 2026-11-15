@@ -44,7 +44,7 @@ fun baseline(night: Pair<Int, Int> = 22 * 60 to 7 * 60) = Snapshot.capture(
 
 fun at(y: Int, m: Int, d: Int, h: Int, min: Int = 0): LocalDateTime = LocalDateTime.of(y, m, d, h, min)
 
-fun ctx(now: LocalDateTime, roaming: Boolean = false, attempts: Int = 0) =
-    PolicyContext(now, 22 * 60, 7 * 60, roaming, attempts)
+fun ctx(now: LocalDateTime, roaming: Boolean = false, attempts: Int = 0, manual: Boolean = false) =
+    PolicyContext(now, 22 * 60, 7 * 60, roaming, attempts, manual = manual)
 
 fun dev(key: SettingKey, expected: SettingValue, actual: SettingValue) = Deviation(key, expected, actual)

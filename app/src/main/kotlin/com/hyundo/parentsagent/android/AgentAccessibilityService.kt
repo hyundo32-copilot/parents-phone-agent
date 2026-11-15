@@ -18,6 +18,10 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.hyundo.parentsagent.core.SwitchAttempt
+import com.hyundo.parentsagent.core.SwitchFinder
+import com.hyundo.parentsagent.core.UiNode
+import com.hyundo.parentsagent.core.SwitchOutcome
 
 /** 빠른 설정 타일. labels 는 One UI 타일 표시 이름(텍스트 또는 접근성 설명)에 들어 있는 문구. */
 enum class Tile(val labels: List<String>) {
@@ -158,6 +162,58 @@ class AgentAccessibilityService : AccessibilityService() {
         return null
     }
 
+    // ---- 설정 화면 스위치 (빠른 설정 타일이 안 될 때의 차선책) ----
+
+    /**
+     * [intent]로 설정 화면을 열어 [labels] 문구가 있는 스위치를 [want] 상태로 바꾼다.
+     * One UI 9.0 실기(2026-11-14)에서 빠른 설정 타일 탭이 안 돼 추가했다.
+     * 결과의 [SwitchAttempt.outcome]이 어디서 막혔는지 알려 준다 (스위치 못 찾음 / 못 누름 / 눌렀지만 안 바뀜).
+     */
+    fun setSwitchInSettings(intent: Intent, labels: List<String>, want: Boolean, singlePurpose: Boolean = false): SwitchAttempt {
+        startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            // 창 전환 직후엔 트리가 비어 있을 수 있어 waitFor가 매번 루트를 다시 읽는다.
+            val found = waitFor(timeoutMs = 6_000) { SwitchFinder.find(rootOf(), labels, singlePurpose) }
+                ?: return SwitchAttempt(SwitchOutcome.NOT_FOUND, SwitchFinder.describe(rootOf(), labels))
+            val strategy = found.strategy
+            if (found.checked == want) return SwitchAttempt(SwitchOutcome.ALREADY, strategy = strategy)
+            val target = (found.node as AccNode).raw
+            if (!clickNode(target)) return SwitchAttempt(SwitchOutcome.CLICK_FAILED, strategy = strategy)
+            if (found.checked == null) {
+                // 행 클릭으로 상태가 화면에 안 나오는 경우: 나중에 상태가 보이면 확인하고, 아니면 복원 후 재읽기에 맡긴다.
+                val seen = waitFor(timeoutMs = 2_000) { SwitchFinder.find(rootOf(), labels, singlePurpose)?.checked }
+                val outcome = when (seen) {
+                    null -> SwitchOutcome.CLICKED_UNVERIFIED
+                    want -> SwitchOutcome.CHANGED
+                    else -> SwitchOutcome.NOT_CHANGED
+                }
+                return SwitchAttempt(outcome, strategy = strategy)
+            }
+            val changed = waitFor(timeoutMs = 3_000) {
+                SwitchFinder.find(rootOf(), labels, singlePurpose)?.takeIf { it.checked == want }
+            } != null
+            return SwitchAttempt(if (changed) SwitchOutcome.CHANGED else SwitchOutcome.NOT_CHANGED, strategy = strategy)
+        } finally {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+    }
+
+    private fun rootOf(): UiNode? = rootInActiveWindow?.let { AccNode(it) }
+
+    private fun findSwitch(labels: List<String>): AccessibilityNodeInfo? =
+        (SwitchFinder.find(rootOf(), labels, singlePurpose = false)?.node as AccNode?)?.raw
+
+    /** 안드로이드 노드를 [UiNode]로 감싼다. 자식·부모는 필요할 때 읽는다. */
+    private class AccNode(val raw: AccessibilityNodeInfo) : UiNode {
+        override val text get() = raw.text?.toString()
+        override val desc get() = raw.contentDescription?.toString()
+        override val isCheckable get() = raw.isCheckable
+        override val isClickable get() = raw.isClickable
+        override val isChecked get() = raw.isChecked
+        override val children get() = (0 until raw.childCount).mapNotNull { raw.getChild(it)?.let(::AccNode) }
+        override val parent get() = raw.parent?.let(::AccNode)
+    }
+
     // ---- 앱 알림 설정 화면 ----
 
     /** 앱 알림 설정 화면의 "알림 허용" 스위치 상태. 못 읽으면 null. 실기 확인 필요(삼성 화면 구조). */
@@ -192,22 +248,8 @@ class AgentAccessibilityService : AccessibilityService() {
         startActivity(i)
     }
 
-    private fun findMasterSwitch(): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
-        for (label in listOf("알림 허용", "알림 표시", "Allow notifications", "Show notifications")) {
-            root.findAccessibilityNodeInfosByText(label)?.forEach { n ->
-                (firstCheckable(n) ?: firstCheckable(n.parent))?.let { return it }
-            }
-        }
-        return null
-    }
-
-    private fun firstCheckable(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (n == null) return null
-        if (n.isCheckable) return n
-        for (i in 0 until n.childCount) firstCheckable(n.getChild(i))?.let { return it }
-        return null
-    }
+    private fun findMasterSwitch(): AccessibilityNodeInfo? =
+        findSwitch(listOf("알림 허용", "알림 표시", "Allow notifications", "Show notifications"))
 
     // ---- 공통 ----
 

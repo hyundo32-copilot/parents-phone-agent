@@ -190,6 +190,14 @@ class CheckRunnerTest {
         assertEquals(1, f.hist.restoreCount(SettingKey.WIFI, now.toLocalDate()))
     }
 
+    @Test fun `고친 기록에 복원 수단·진단(method)이 함께 남는다`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.failKeys = setOf(SettingKey.WIFI)
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.logs.any { it.contains("(실패)") && it.endsWith(" — 가짜") })
+    }
+
     @Test fun `부모님이 중단하면 에스컬레이션하지 않고 남은 항목을 더 고치지 않는다`() {
         val f = Fake()
         f.current[SettingKey.WIFI] = flag(false)

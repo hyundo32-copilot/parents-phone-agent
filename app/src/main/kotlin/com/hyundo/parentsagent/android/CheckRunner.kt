@@ -73,7 +73,7 @@ class CheckRunner(
                 // 로밍은 데이터 항목을 판정하기 직전에 읽는다 (점검 시작 때 값은 낡을 수 있다). 모르면 로밍으로 본다.
                 val roaming = dev.key == SettingKey.MOBILE_DATA && device.roamingState() != RoamingState.HOME
 
-                val d = policy.decide(dev, PolicyContext(now, baseline.nightStartMin, baseline.nightEndMin, roaming, attempts.size))
+                val d = policy.decide(dev, PolicyContext(now, baseline.nightStartMin, baseline.nightEndMin, roaming, attempts.size, manual = trigger == Trigger.MANUAL))
                 decidedKeys += dev.key
                 when (d) {
                     is Decision.Restore -> {
@@ -85,7 +85,9 @@ class CheckRunner(
                             store.appendLog("${dev.key.label}: 부모님이 중단해서 고치지 않았어요")
                             break
                         }
-                        history.recordRestoreAttempt(dev.key, now.toLocalDate())
+                        // 수동 점검의 복원은 주인이 직접 누른 것이라 일일 횟수에 세지 않는다.
+                        // 세면 수동으로 두 번 고친 뒤 자동 점검이 그날 멈춰 버린다.
+                        if (trigger != Trigger.MANUAL) history.recordRestoreAttempt(dev.key, now.toLocalDate())
                         val a = restorer.restore(dev)
                         attempts += a
                         if (a.key == SettingKey.AIRPLANE_MODE && a.result == AttemptResult.SUCCESS) airplaneRestored = true
@@ -149,8 +151,11 @@ class CheckRunner(
         }
     }
 
-    private fun logLine(a: RestoreAttempt): String =
-        "${a.key.label}: ${a.before.display()} → ${a.after.display()} (${a.result.text})"
+    /** method(어떻게 시도했고 왜 안 됐는지 진단)를 뒤에 붙인다. 텔레그램이 없으면 이 로그가 유일한 확인 경로다. */
+    private fun logLine(a: RestoreAttempt): String {
+        val base = "${a.key.label}: ${a.before.display()} → ${a.after.display()} (${a.result.text})"
+        return if (a.method.isBlank()) base else "$base — ${a.method}"
+    }
 
     companion object {
         /** 복원 수단이 접근성(빠른 설정·설정 화면)인 항목. 방해금지는 일반 API가 먼저지만 폴백이 접근성이라 같이 묶는다. */

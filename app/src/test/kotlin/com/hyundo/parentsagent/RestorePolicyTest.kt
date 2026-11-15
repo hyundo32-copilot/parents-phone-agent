@@ -59,6 +59,16 @@ class RestorePolicyTest {
         assertTrue(d.notify)
     }
 
+    @Test fun `수동 점검은 일일 한도와 점검당 한도를 적용하지 않는다`() {
+        val day = noon.toLocalDate()
+        repeat(2) { history.recordRestoreAttempt(SettingKey.AIRPLANE_MODE, day) }
+        // 자동은 막히지만 수동은 복원한다
+        assertTrue(policy.decide(airplane, ctx(noon, manual = true)) is Decision.Restore)
+        assertTrue(policy.decide(airplane, ctx(noon, attempts = 3, manual = true)) is Decision.Restore)
+        val d = policy.decide(airplane, ctx(noon)) as Decision.Skip
+        assertEquals(SkipReason.DAILY_LIMIT, d.reason)
+    }
+
     @Test fun `일일 한도는 항목별이고 다음 날 초기화된다`() {
         val day = noon.toLocalDate()
         repeat(2) { history.recordRestoreAttempt(SettingKey.AIRPLANE_MODE, day) }
