@@ -60,6 +60,8 @@ class CheckRunnerTest {
         override fun history() = hist
         override fun saveHistory(h: RestoreHistory) { events += "saveHistory" }
         override fun appendLog(text: String) { logs += text }
+        var savedResult: Pair<Long, LastCheckGrade>? = null
+        override fun saveLastResult(atMillis: Long, grade: LastCheckGrade) { savedResult = atMillis to grade }
         override fun send(raw: String): SendOutcome { sent += raw; return sendOutcome }
         override fun speakAndWait(text: String) = true
         override fun speak(text: String) = true
@@ -226,5 +228,36 @@ class CheckRunnerTest {
         val outcome = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
         assertEquals("알림 설정 오류로 현도에게 못 알렸어요", outcome.summary)
         assertTrue(f.logs.any { it.startsWith("알림 설정 오류") })
+    }
+
+    // --- 상태 카드용 마지막 점검 결과 저장 ---
+
+    @Test fun `정상 점검은 시각과 OK 등급을 저장한다`() {
+        val f = Fake()
+        f.runner().run(Trigger.MANUAL)
+        assertEquals(5_000L to LastCheckGrade.OK, f.savedResult)
+    }
+
+    @Test fun `복원에 실패하면 FAILED 등급을 저장한다`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.failKeys = setOf(SettingKey.WIFI)
+        f.runner().run(Trigger.MANUAL)
+        assertEquals(LastCheckGrade.FAILED, f.savedResult?.second)
+    }
+
+    @Test fun `고쳐진 점검은 OK 등급이다`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.runner().run(Trigger.MANUAL)
+        assertEquals(LastCheckGrade.OK, f.savedResult?.second)
+    }
+
+    @Test fun `중단한 점검은 이전 결과를 덮어쓰지 않는다`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.stopAfterRestore = true
+        f.runner().run(Trigger.MANUAL)
+        assertNull(f.savedResult)
     }
 }

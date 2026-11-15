@@ -117,6 +117,8 @@ class CheckRunner(
             val stopped = stop.requested
             // 복원 뒤 다시 비교. 판정을 거친 건너뜀·미룬 항목은 이미 사유와 함께 보고했거나 일부러 조용히 둔 것이라 제외
             val remaining = SnapshotDiff.compare(baseline, device.readAll(deep)).deviations.filter { it.key !in decidedKeys || attempts.any { a -> a.key == it.key } }
+            // 중단한 점검은 결과를 모르므로 이전 결과를 그대로 둔다
+            if (!stopped) store.saveLastResult(nowMillis(), LastCheckGrade.of(attempts, remaining))
             val report = EscalationReport(
                 symptom = symptom,
                 deviations = cmp.deviations,

@@ -1,6 +1,7 @@
 package com.hyundo.parentsagent.android
 
 import android.content.Context
+import com.hyundo.parentsagent.core.LastCheckGrade
 import com.hyundo.parentsagent.core.RestoreHistory
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.net.Outbox
@@ -25,6 +26,14 @@ class Store(context: Context) : CheckStore {
     override var lastCheckMillis: Long
         get() = p.getLong("lastCheck", 0L)
         set(v) = p.edit().putLong("lastCheck", v).apply()
+
+    /** 마지막 점검 결과 시각. 0이면 알 수 없음 (이 필드가 생기기 전 저장본 포함). */
+    val lastResultMillis: Long get() = p.getLong("lastResultAt", 0L)
+    val lastResultGrade: LastCheckGrade get() = LastCheckGrade.parse(p.getString("lastResultGrade", null))
+
+    override fun saveLastResult(atMillis: Long, grade: LastCheckGrade) {
+        p.edit().putLong("lastResultAt", atMillis).putString("lastResultGrade", grade.name).apply()
+    }
 
     /** 마지막으로 안부 신호를 보낸 슬롯의 날짜 (하루 1회 중복 방지). */
     var lastHeartbeatSlotDate: LocalDate?
