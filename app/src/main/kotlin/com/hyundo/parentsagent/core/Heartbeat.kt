@@ -5,7 +5,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-/** 심박 메시지 (설계 §4). 정상과 보낸 시각만 담는다. 설정값·메시지 내용은 넣지 않는다. */
+/** 안부 신호 메시지 (설계 §4). 정상과 보낸 시각만 담는다. 설정값·메시지 내용은 넣지 않는다. */
 object HeartbeatMessage {
     val DELAY_THRESHOLD: Duration = Duration.ofHours(1)
     private val FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
@@ -14,7 +14,7 @@ object HeartbeatMessage {
         Duration.between(scheduledAt, sentAt) >= DELAY_THRESHOLD
 
     fun build(scheduledAt: LocalDateTime, sentAt: LocalDateTime): String {
-        val head = if (isDelayed(scheduledAt, sentAt)) "[부모님 폰 심박] 정상 (지연됨)" else "[부모님 폰 심박] 정상"
+        val head = if (isDelayed(scheduledAt, sentAt)) "[부모님 폰 안부 신호] 정상 (지연됨)" else "[부모님 폰 안부 신호] 정상"
         return "$head\n보낸 시각: ${sentAt.format(FMT)}"
     }
 }

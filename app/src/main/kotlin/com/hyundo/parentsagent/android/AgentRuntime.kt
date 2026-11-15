@@ -51,7 +51,7 @@ object AgentRuntime {
     }
 
     /**
-     * 접근성 서비스가 켜져 있는지. 꺼져 있으면 앱은 아무것도 복원하지 못하므로 심박을 내보내지 않는다.
+     * 접근성 서비스가 켜져 있는지. 꺼져 있으면 앱은 아무것도 복원하지 못하므로 안부 신호를 내보내지 않는다.
      * 프로세스가 먼저 떠서 서비스 연결 전일 수 있어 설정의 활성 목록으로 판단한다.
      */
     fun isAccessibilityEnabled(context: Context): Boolean =
@@ -72,7 +72,7 @@ object AgentRuntime {
         async { sender.flush(); heartbeat.trySend(LocalDateTime.now()) }
     }
 
-    /** 심박 전송 시도. 알람·망 복구·잠금 해제 때 부른다. 보낼 차례가 아니면 아무것도 안 한다. */
+    /** 안부 신호 전송 시도. 알람·망 복구·잠금 해제 때 부른다. 보낼 차례가 아니면 아무것도 안 한다. */
     fun sendHeartbeatAsync(context: Context) {
         init(context)
         async { heartbeat.trySend(LocalDateTime.now()) }
@@ -81,7 +81,7 @@ object AgentRuntime {
     /** 잠금 해제 후 첫 점검. 6시간 안에 점검했으면 건너뛴다 (배터리 부담을 줄이기 위한 가벼운 기준). */
     fun onUnlock(context: Context) {
         init(context)
-        sendHeartbeatAsync(context) // 지연된 심박이 있으면 이때 따라잡는다
+        sendHeartbeatAsync(context) // 지연된 안부 신호가 있으면 이때 따라잡는다
         if (System.currentTimeMillis() - store.lastCheckMillis < UNLOCK_CHECK_MIN_GAP_MS) return
         runCheckAsync(context, Trigger.UNLOCK)
     }

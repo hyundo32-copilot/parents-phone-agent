@@ -10,10 +10,10 @@ import java.time.LocalDateTime
 enum class HeartbeatOutcome { SENT, SENT_DELAYED, NOT_DUE, DEFERRED, UNHEALTHY }
 
 /**
- * 하루 1회 심박 전송. 기존 TelegramClient를 그대로 쓴다. Liner 요약은 거치지 않는다.
+ * 하루 1회 안부 신호 전송. 기존 TelegramClient를 그대로 쓴다. Liner 요약은 거치지 않는다.
  * 망이 끊기면 "보낼 차례" 상태가 그대로 남아(대기열 1칸) 다음 시도 때 실제 보낸 시각과 지연 표시로 한 통만 나간다.
  * 36시간 끊김 판단은 받는 쪽(현도)이 한다. 서버 감시는 없다.
- * 앱이 건강하지 않으면(접근성 꺼짐 등) 보내지 않는다. 심박이 끊기는 것이 현도에게 권한 꺼짐을 알리는 신호다 (설계 §4).
+ * 앱이 건강하지 않으면(접근성 꺼짐 등) 보내지 않는다. 안부 신호가 끊기는 것이 현도에게 권한 꺼짐을 알리는 신호다 (설계 §4).
  */
 class HeartbeatSender(
     private val telegram: TelegramClient,

@@ -8,11 +8,11 @@ import android.content.Intent
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-/** 하루 2회(아침·저녁) 주기 점검 + 하루 1회 심박 (설계 §4). 정확한 시각이 필요 없어 inexact 알람을 쓴다. */
+/** 하루 2회(아침·저녁) 주기 점검 + 하루 1회 안부 신호 (설계 §4). 정확한 시각이 필요 없어 inexact 알람을 쓴다. */
 object Scheduler {
     val SLOT_HOURS = listOf(8, 19)
     const val HEARTBEAT_HOUR = 9
-    val HEARTBEAT_SLOT = SLOT_HOURS.size // 점검 슬롯 뒤 번호를 심박 알람에 쓴다
+    val HEARTBEAT_SLOT = SLOT_HOURS.size // 점검 슬롯 뒤 번호를 안부 신호 알람에 쓴다
     private const val EXTRA_SLOT = "slot"
 
     fun scheduleAll(context: Context) {

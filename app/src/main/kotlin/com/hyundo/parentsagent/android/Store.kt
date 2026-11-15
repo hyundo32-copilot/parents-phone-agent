@@ -26,7 +26,7 @@ class Store(context: Context) : CheckStore {
         get() = p.getLong("lastCheck", 0L)
         set(v) = p.edit().putLong("lastCheck", v).apply()
 
-    /** 마지막으로 심박을 보낸 슬롯의 날짜 (하루 1회 중복 방지). */
+    /** 마지막으로 안부 신호를 보낸 슬롯의 날짜 (하루 1회 중복 방지). */
     var lastHeartbeatSlotDate: LocalDate?
         get() = p.getString("hbSlot", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         set(v) = p.edit().putString("hbSlot", v?.toString()).apply()

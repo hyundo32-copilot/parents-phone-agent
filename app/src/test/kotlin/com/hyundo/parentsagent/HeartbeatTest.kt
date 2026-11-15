@@ -22,7 +22,7 @@ class HeartbeatTest {
 
     @Test fun `정상 메시지는 정상과 보낸 시각만 담는다`() {
         val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5))
-        assertEquals("[부모님 폰 심박] 정상\n보낸 시각: 2026-11-13 09:05", m)
+        assertEquals("[부모님 폰 안부 신호] 정상\n보낸 시각: 2026-11-13 09:05", m)
         assertFalse(m.contains("지연됨"))
     }
 
@@ -33,7 +33,7 @@ class HeartbeatTest {
 
     @Test fun `정확히 1시간 늦으면 지연됨 표시`() {
         val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10))
-        assertEquals("[부모님 폰 심박] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00", m)
+        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00", m)
     }
 
     // --- 하루 1회 ---
@@ -90,7 +90,7 @@ class HeartbeatTest {
         val s = sender(t, mem)
         s.trySend(at(2026, 11, 13, 9, 1))
         assertEquals(HeartbeatOutcome.SENT_DELAYED, s.trySend(at(2026, 11, 13, 14, 20)))
-        assertEquals("[부모님 폰 심박] 정상 (지연됨)\n보낸 시각: 2026-11-13 14:20", sentText(t, 1))
+        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 14:20", sentText(t, 1))
         assertEquals(HeartbeatOutcome.NOT_DUE, s.trySend(at(2026, 11, 13, 14, 21)))
         assertEquals(2, t.calls.size)
     }
@@ -103,7 +103,7 @@ class HeartbeatTest {
         assertEquals(HeartbeatOutcome.NOT_DUE, s.trySend(at(2026, 11, 13, 13)))
     }
 
-    // --- 건강 게이트 (접근성이 꺼지면 심박이 끊겨야 현도가 안다) ---
+    // --- 건강 게이트 (접근성이 꺼지면 안부 신호가 끊겨야 현도가 안다) ---
 
     @Test fun `건강하지 않으면 전송 호출도 기록도 없다`() {
         val t = FakeTransport(mutableListOf())
@@ -113,7 +113,7 @@ class HeartbeatTest {
         assertEquals(LocalDate.of(2026, 11, 12), mem.last)
     }
 
-    @Test fun `접근성이 꺼진 동안 며칠이 지나도 심박은 안 나간다`() {
+    @Test fun `접근성이 꺼진 동안 며칠이 지나도 안부 신호는 안 나간다`() {
         val t = FakeTransport(mutableListOf())
         val s = sender(t, Mem(), healthy = { false })
         repeat(3) { assertEquals(HeartbeatOutcome.UNHEALTHY, s.trySend(at(2026, 11, 13 + it, 9, 5))) }
