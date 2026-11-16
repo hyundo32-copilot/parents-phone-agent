@@ -21,7 +21,7 @@ class FaultInjectionActivity : android.app.Activity() {
         }
         box.addView(Ui.text(this, "장애 주입 (데모·테스트용)", 26f, bold = true))
         box.addView(Ui.text(this, "누르면 일부러 고장을 만들어요. 뒤로 가서 [지금 점검하기]를 누르면 복원돼요."))
-        fun add(label: String, action: () -> String) = box.addView(Ui.button(this, label, "#6A1B9A") {
+        fun add(label: String, action: () -> String) = box.addView(Ui.manageButton(this, label) {
             result.text = "실행 중…"
             AgentRuntime.async { val r = action(); runOnUiThread { result.text = r } }
         })

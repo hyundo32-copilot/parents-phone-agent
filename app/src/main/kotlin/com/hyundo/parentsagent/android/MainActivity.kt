@@ -15,6 +15,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.hyundo.parentsagent.BuildConfig
+import com.hyundo.parentsagent.core.LogPresentation
 import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.core.StatusCard
@@ -22,7 +23,6 @@ import com.hyundo.parentsagent.core.StatusInput
 import com.hyundo.parentsagent.core.Symptom
 import com.hyundo.parentsagent.core.Thresholds
 import java.text.SimpleDateFormat
-import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
@@ -31,6 +31,7 @@ class MainActivity : android.app.Activity() {
     private lateinit var scroll: ScrollView
     // 펼침 상태는 render()가 뷰를 다시 만들어도 유지한다. 저장은 안 해서 앱을 다시 켜면 닫힌 채 시작한다 (데모 모드면 펼친 채).
     private var adminOpen = false
+    private var manageOpen = false
     private var logOpen = false
     private lateinit var banner: LinearLayout
     private lateinit var bannerText: TextView
@@ -41,7 +42,10 @@ class MainActivity : android.app.Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AgentRuntime.init(this)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(Ui.SCREEN_BG))
+        }
         banner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FFF3CD"))
@@ -50,7 +54,7 @@ class MainActivity : android.app.Activity() {
         }
         bannerText = Ui.text(this, "", 24f, bold = true)
         banner.addView(bannerText)
-        banner.addView(Ui.button(this, "중단", "#D32F2F") { StopController.request() }.apply { minimumHeight = Ui.dp(this@MainActivity, 96) })
+        banner.addView(Ui.button(this, "중단", Ui.BAD) { StopController.request() }.apply { minimumHeight = Ui.dp(this@MainActivity, 96) })
         root.addView(banner)
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -59,6 +63,7 @@ class MainActivity : android.app.Activity() {
         scroll = ScrollView(this).apply { addView(content) }
         root.addView(scroll)
         adminOpen = store.demoMode
+        manageOpen = store.demoMode
         setContentView(root)
     }
 
@@ -104,15 +109,17 @@ class MainActivity : android.app.Activity() {
         val snap = store.snapshot()
         val pausedKeys = store.history().pausedKeys()
 
-        // 부모님 영역: 상태 → (데모 띠) → 권한 안내 → 큰 버튼 2개 → 할 일 안내 → 최근 고친 일
+        // 부모님 영역(카드별): 상태 → (데모 띠) → 권한 안내 → 큰 버튼 2개 → 할 일 안내 → 최근 고친 일 → 취침 시간
         renderStatusCard(accOn, policyOn, snap != null, pausedKeys.size)
         renderPermissionNotice(accOn, policyOn)
         renderActions()
         renderTodoCards(snap != null, pausedKeys)
         renderRecent()
-        // 가족·관리용
+        renderSleepTime(snap)
+        // 가족·관리용 (각각 카드 안의 접힘 영역)
         content.addView(Ui.divider(this, "아래는 가족이 관리하는 부분이에요"))
-        renderAdmin(accOn, policyOn, snap)
+        renderFamily(snap)
+        renderAdmin(accOn, policyOn)
         scroll.post { scroll.scrollTo(0, scrollY) }
     }
 
@@ -150,8 +157,13 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun renderActions() {
-        content.addView(Ui.bigButton(this, "지금 점검하기", "폰 설정을 확인해요") { startCheck(Trigger.MANUAL, null) })
-        content.addView(Ui.bigButton(this, "폰이 이상해요", "말로 알려 주세요", "#E65100") { askSymptom() })
+        content.addView(
+            Ui.card(
+                this,
+                Ui.tile(this, "🔍", "지금 점검하기", "설정이 괜찮은지 봐요") { startCheck(Trigger.MANUAL, null) },
+                Ui.tile(this, "🆘", "폰이 이상해요", "가족에게 바로 알려요") { askSymptom() },
+            ),
+        )
     }
 
     /** 할 일이 있을 때만 나오는 안내. 기준 찍기는 가족 몫이라 부모님에게는 안내만 한다. */
@@ -167,55 +179,78 @@ class MainActivity : android.app.Activity() {
             card.addView(Ui.text(this, "잠깐 쉬고 있는 항목이 있어요", 22f, bold = true))
             card.addView(Ui.text(this, "같은 이탈이 3일 연속 반복돼 자동 복원이 멈췄어요. 원인을 확인한 뒤 다시 켜 주세요.", 18f))
             pausedKeys.forEach { k ->
-                card.addView(Ui.button(this, "${k.label} 다시 자동 복원", "#2E7D32") { resumeAutoRestore(listOf(k)) })
+                card.addView(Ui.manageButton(this, "${k.label} 다시 자동 복원") { resumeAutoRestore(listOf(k)) })
             }
             content.addView(card)
         }
     }
 
     private fun renderRecent() {
-        content.addView(Ui.text(this, "최근 고친 일", 24f, bold = true).apply { setPadding(0, Ui.dp(this@MainActivity, 20), 0, Ui.dp(this@MainActivity, 4)) })
-        val log = store.log().take(5)
-        if (log.isEmpty()) content.addView(Ui.text(this, "아직 기록이 없어요."))
+        val card = Ui.card(this)
+        card.addView(Ui.text(this, "최근 고친 일", 24f, bold = true))
+        val rows = LogPresentation.parentRows(store.log(), 5)
+        if (rows.isEmpty()) card.addView(Ui.text(this, "아직 고친 일이 없어요"))
         val now = System.currentTimeMillis()
-        log.forEach { content.addView(Ui.text(this, "${StatusCard.friendlyTime(it.timeMillis, now, ZoneId.systemDefault())}\n${it.text}", 20f)) }
+        rows.forEach { card.addView(Ui.logRowView(this, it, now)) }
+        content.addView(card)
     }
 
-    private fun renderAdmin(accOn: Boolean, policyOn: Boolean, snap: Snapshot?) {
+    /** 부모님이 보는 취침 시간. 기준을 찍은 뒤에만 나온다. */
+    private fun renderSleepTime(snap: Snapshot?) {
+        if (snap == null) return
+        val card = Ui.card(this)
+        card.addView(Ui.text(this, "취침 시간", 24f, bold = true))
+        card.addView(Ui.text(this, "${hm(snap.nightStartMin)} ~ ${hm(snap.nightEndMin)}"))
+        content.addView(card)
+    }
+
+    /** 가족 영역: 기준 상태, 기준 다시 찍기, 못 보낸 알림. 길게 눌러야 열린다. */
+    private fun renderFamily(snap: Snapshot?) {
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val c = this
+        body.addView(Ui.text(c, "정상일 때 모습 (기준)", 22f, bold = true))
+        if (snap == null) {
+            body.addView(Ui.text(c, "아직 기준이 없어요. 폰이 정상일 때 아래 버튼을 눌러 주세요."))
+        } else {
+            body.addView(Ui.text(c, "찍은 시각: ${fmt(snap.takenAtMillis)}"))
+            val lines = SettingKey.entries.mapNotNull { k -> snap.values[k]?.let { "${k.label}: ${it.display()}" } }
+            body.addView(Ui.text(c, lines.joinToString("\n"), 18f))
+        }
+        body.addView(Ui.manageButton(c, "기준 다시 찍기 (가족이 할 일)") { confirmSnapshot() })
+
+        val queued = store.outbox().size
+        if (queued > 0) {
+            body.addView(Ui.text(c, "아직 못 보낸 알림 ${queued}건 (망이 돌아오면 다시 보내요)", 18f))
+            body.addView(Ui.manageButton(c, "지금 다시 보내기") {
+                AgentRuntime.flushOutboxAsync(this); toast("다시 보내는 중이에요")
+            })
+        }
+        content.addView(
+            Ui.card(
+                c,
+                Ui.collapsible(
+                    c, "▸ 가족용 (길게 눌러서 열기)", "▾ 가족용 (눌러서 닫기)", adminOpen,
+                    longPressToOpen = true, onToggle = { adminOpen = it }, body = body,
+                ),
+            ),
+        )
+    }
+
+    private fun renderAdmin(accOn: Boolean, policyOn: Boolean) {
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val c = this
 
         // 권한 한 줄 (꺼져 있으면 위쪽 안내 카드에 이미 나온다)
         if (accOn && policyOn) body.addView(Ui.text(c, "✔ 접근성 켜짐 · ✔ 알림 정책 켜짐", 18f))
 
-        // 기준 상태
-        body.addView(Ui.text(c, "정상일 때 모습 (기준)", 22f, bold = true))
-        if (snap == null) {
-            body.addView(Ui.text(c, "아직 기준이 없어요. 폰이 정상일 때 아래 버튼을 눌러 주세요."))
-        } else {
-            body.addView(Ui.text(c, "찍은 시각: ${fmt(snap.takenAtMillis)}\n취침 시간: ${hm(snap.nightStartMin)} ~ ${hm(snap.nightEndMin)}"))
-            val lines = SettingKey.entries.mapNotNull { k -> snap.values[k]?.let { "${k.label}: ${it.display()}" } }
-            body.addView(Ui.text(c, lines.joinToString("\n"), 18f))
-        }
-        body.addView(Ui.button(c, "기준 다시 찍기 (가족이 할 일)", "#546E7A") { confirmSnapshot() })
-
-        // 전체 기록 (접힘, 짧게 눌러 열기)
+        // 전체 기록 (접힘, 짧게 눌러 열기). 원문 그대로, 바로 이어진 같은 줄만 묶는다.
         val logBody = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
-        val log = store.log().take(20)
-        if (log.isEmpty()) logBody.addView(Ui.text(c, "아직 기록이 없어요."))
-        log.forEach { logBody.addView(Ui.text(c, "${fmt(it.timeMillis)}  ${it.text}", 18f)) }
+        val rows = LogPresentation.adminRows(store.log(), 20)
+        if (rows.isEmpty()) logBody.addView(Ui.text(c, "아직 기록이 없어요."))
+        rows.forEach { logBody.addView(Ui.text(c, "${fmt(it.timeMillis)}  ${LogPresentation.formatCount(it.text, it.count)}", 18f)) }
         body.addView(
             Ui.collapsible(c, "▸ 전체 기록 (최근 20건)", "▾ 전체 기록 (최근 20건)", logOpen, longPressToOpen = false, onToggle = { logOpen = it }, body = logBody),
         )
-
-        // 대기열
-        val queued = store.outbox().size
-        if (queued > 0) {
-            body.addView(Ui.text(c, "아직 못 보낸 알림 ${queued}건 (망이 돌아오면 다시 보내요)", 18f))
-            body.addView(Ui.button(c, "지금 다시 보내기", "#546E7A") {
-                AgentRuntime.flushOutboxAsync(this); toast("다시 보내는 중이에요")
-            })
-        }
 
         // 데모 / 개발
         body.addView(Ui.text(c, "데모 설정", 22f, bold = true))
@@ -230,16 +265,19 @@ class MainActivity : android.app.Activity() {
         // 장시간 통화 감지는 2단계. 1단계에서는 임계값을 저장·표시만 한다.
         body.addView(Ui.text(c, "장시간 통화 기준: ${Thresholds.of(store.demoMode).longCallMinutes}분 (감지는 2단계에서 동작)", 18f))
         if (BuildConfig.DEBUG) {
-            body.addView(Ui.button(c, "장애 주입 메뉴 (데모·테스트용)", "#6A1B9A") {
+            body.addView(Ui.manageButton(c, "장애 주입 메뉴 (데모·테스트용)") {
                 startActivity(Intent(this, FaultInjectionActivity::class.java))
             })
         }
         body.addView(Ui.text(c, "Liner 키 ${if (AppConfig.linerApiKey.isBlank()) "없음" else "있음"} · 텔레그램 ${if (AppConfig.telegramBotToken.isBlank() || AppConfig.telegramChatId.isBlank()) "없음" else "있음"}", 14f))
 
         content.addView(
-            Ui.collapsible(
-                c, "▸ 가족·관리용 (길게 눌러서 열기)", "▾ 가족·관리용 (눌러서 닫기)", adminOpen,
-                longPressToOpen = true, onToggle = { adminOpen = it }, body = body,
+            Ui.card(
+                c,
+                Ui.collapsible(
+                    c, "▸ 관리용 (길게 눌러서 열기)", "▾ 관리용 (눌러서 닫기)", manageOpen,
+                    longPressToOpen = true, onToggle = { manageOpen = it }, body = body,
+                ),
             ),
         )
     }
@@ -261,7 +299,7 @@ class MainActivity : android.app.Activity() {
         var ne = Snapshot.DEFAULT_NIGHT_END
         fun pickerButton(label: String, get: () -> Int, set: (Int) -> Unit): android.widget.Button {
             lateinit var b: android.widget.Button
-            b = Ui.button(this, "$label ${hm(get())}", "#546E7A") {
+            b = Ui.manageButton(this, "$label ${hm(get())}") {
                 android.app.TimePickerDialog(this, { _, h, m -> set(h * 60 + m); b.text = "$label ${hm(get())}" }, get() / 60, get() % 60, true).show()
             }
             return b

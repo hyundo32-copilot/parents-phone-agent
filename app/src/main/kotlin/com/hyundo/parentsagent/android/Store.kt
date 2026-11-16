@@ -2,14 +2,14 @@ package com.hyundo.parentsagent.android
 
 import android.content.Context
 import com.hyundo.parentsagent.core.LastCheckGrade
+import com.hyundo.parentsagent.core.LogEntry
+import com.hyundo.parentsagent.core.LogKind
 import com.hyundo.parentsagent.core.RestoreHistory
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.net.Outbox
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
-
-data class LogEntry(val timeMillis: Long, val text: String)
 
 /** 기기 안(SharedPreferences)에만 저장한다. 백업도 끈 상태(allowBackup=false). */
 class Store(context: Context) : CheckStore {
@@ -50,11 +50,14 @@ class Store(context: Context) : CheckStore {
     @Synchronized fun outbox(): Outbox = Outbox(p.getString("outbox", null))
     @Synchronized fun saveOutbox(o: Outbox) = p.edit().putString("outbox", o.toJson()).apply()
 
-    override fun appendLog(text: String) = appendLog(text, System.currentTimeMillis())
+    override fun appendLog(text: String) = appendLog(text, LogKind.DEV, null)
 
-    @Synchronized fun appendLog(text: String, nowMillis: Long) {
+    override fun appendLog(text: String, kind: LogKind, parentText: String?) =
+        appendLog(text, System.currentTimeMillis(), kind, parentText)
+
+    @Synchronized fun appendLog(text: String, nowMillis: Long, kind: LogKind = LogKind.DEV, parentText: String? = null) {
         val arr = JSONArray(p.getString("log", "[]"))
-        arr.put(JSONObject().put("t", nowMillis).put("x", text))
+        arr.put(LogEntry(nowMillis, text, kind, parentText).toJson())
         val trimmed = JSONArray()
         for (i in maxOf(0, arr.length() - MAX_LOG) until arr.length()) trimmed.put(arr.get(i))
         p.edit().putString("log", trimmed.toString()).apply()
@@ -64,8 +67,7 @@ class Store(context: Context) : CheckStore {
     fun log(): List<LogEntry> {
         val arr = JSONArray(p.getString("log", "[]"))
         return (arr.length() - 1 downTo 0).map { i ->
-            val o = arr.getJSONObject(i)
-            LogEntry(o.getLong("t"), o.getString("x"))
+            LogEntry.fromJson(arr.getJSONObject(i))
         }
     }
 

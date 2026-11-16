@@ -12,6 +12,9 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.hyundo.parentsagent.core.LogKind
+import com.hyundo.parentsagent.core.LogPresentation
+import com.hyundo.parentsagent.core.LogRow
 import com.hyundo.parentsagent.core.LongPressGate
 import com.hyundo.parentsagent.core.StatusLevel
 
@@ -27,7 +30,18 @@ object Ui {
         setPadding(0, dp(c, 8), 0, dp(c, 4))
     }
 
-    fun button(c: Context, s: String, color: String = "#1565C0", onClick: () -> Unit) = Button(c).apply {
+    // 팔레트: 색 하나에 뜻 하나. 주 동작 파랑, 정상 초록·주의 노랑·위험 빨강은 상태에만, 나머지는 회색 보조.
+    const val PRIMARY = "#1565C0"
+    const val OK = "#2E7D32"
+    const val WARN = "#F9A825"
+    const val BAD = "#C62828"
+    const val BORDER = "#E0E0E0"
+    const val GREY_STROKE = "#9E9E9E"
+    const val GREY_TEXT = "#424242"
+    const val SCREEN_BG = "#F5F5F5"
+
+    /** 주 동작(파랑)·[중단](빨강) 버튼. 관리·가족 영역 버튼은 [manageButton]. */
+    fun button(c: Context, s: String, color: String = PRIMARY, onClick: () -> Unit) = Button(c).apply {
         text = s
         textSize = 22f
         setTextColor(Color.WHITE)
@@ -48,33 +62,83 @@ object Ui {
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(c, topMarginDp) }
 
-    /** 흰 바탕에 얇은 테두리의 둥근 구역. 안에 뷰를 addView 해서 쓴다. */
-    fun card(c: Context) = LinearLayout(c).apply {
+    /** 흰 바탕에 얇은 테두리의 둥근 구역. 모서리 16dp, 테두리 1dp, 안쪽 여백 16dp, 카드 간격 12dp. */
+    fun card(c: Context, vararg children: View) = LinearLayout(c).apply {
         orientation = LinearLayout.VERTICAL
-        background = rounded(c, "#FFFFFF", strokeColor = "#CFD8DC")
-        setPadding(dp(c, 16), dp(c, 8), dp(c, 16), dp(c, 16))
+        background = rounded(c, "#FFFFFF", strokeColor = BORDER)
+        setPadding(dp(c, 16), dp(c, 16), dp(c, 16), dp(c, 16))
         layoutParams = fullWidth(c)
+        children.forEach { addView(it) }
     }
 
-    /** 부모님이 누르는 큰 버튼. 높이는 최소값이라 글씨가 커져도 안 잘린다. */
-    fun bigButton(c: Context, title: String, sub: String, color: String = "#1565C0", onClick: () -> Unit) = Button(c).apply {
-        text = "$title\n$sub"
-        textSize = 24f
-        isAllCaps = false
-        setTextColor(Color.WHITE)
-        background = rounded(c, color)
-        minimumHeight = dp(c, 104)
-        layoutParams = fullWidth(c)
+    /**
+     * 부모님이 누르는 큰 타일 버튼 (아이콘 + 제목 + 보조 문구).
+     * 높이는 최소 112dp라 시스템 글꼴이 커지면 늘어난다.
+     */
+    fun tile(c: Context, icon: String, title: String, sub: String?, onClick: () -> Unit) = LinearLayout(c).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = rounded(c, PRIMARY, radiusDp = 20)
+        minimumHeight = dp(c, 112)
+        setPadding(dp(c, 20), dp(c, 16), dp(c, 20), dp(c, 16))
+        layoutParams = fullWidth(c, 16)
+        isClickable = true
+        isFocusable = true
+        contentDescription = if (sub.isNullOrEmpty()) title else "$title, $sub"
         setOnClickListener { onClick() }
+        addView(TextView(c).apply {
+            text = icon; textSize = 32f; setPadding(0, 0, dp(c, 16), 0)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        })
+        addView(LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            addView(TextView(c).apply { text = title; textSize = 27f; setTextColor(Color.WHITE); setTypeface(typeface, android.graphics.Typeface.BOLD) })
+            if (!sub.isNullOrEmpty()) addView(TextView(c).apply { text = sub; textSize = 20f; setTextColor(Color.WHITE) })
+        })
+    }
+
+    /** 관리·가족 영역의 보조 버튼: 흰 바탕, 회색 글씨, 회색 1dp 테두리. */
+    fun manageButton(c: Context, s: String, onClick: () -> Unit) = Button(c).apply {
+        text = s
+        textSize = 20f
+        isAllCaps = false
+        setTextColor(Color.parseColor(GREY_TEXT))
+        background = rounded(c, "#FFFFFF", radiusDp = 12, strokeColor = GREY_STROKE)
+        minimumHeight = dp(c, 64)
+        layoutParams = fullWidth(c, 8)
+        setOnClickListener { onClick() }
+    }
+
+    /** 상태 등급의 바탕색·글씨색·기호. 노랑일 때만 검은 글씨. */
+    private fun levelStyle(level: StatusLevel): Triple<String, Int, String> = when (level) {
+        StatusLevel.GOOD -> Triple(OK, Color.WHITE, "✓")
+        StatusLevel.WARN -> Triple(WARN, Color.BLACK, "!")
+        StatusLevel.BAD -> Triple(BAD, Color.WHITE, "✕")
+    }
+
+    /** 상태 기호 배지. 색만으로 뜻을 전하지 않도록 기호를 같이 쓴다. */
+    fun statusBadge(c: Context, level: StatusLevel): TextView {
+        val (_, fg, icon) = levelStyle(level)
+        return TextView(c).apply {
+            text = icon; textSize = 56f; setTextColor(fg)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, 0, dp(c, 20), 0)
+        }
+    }
+
+    /** 부모님 영역 기록 한 줄: 기호 + 시각 + 문장 (+ 반복 횟수). */
+    fun logRowView(c: Context, row: LogRow, nowMillis: Long): View = TextView(c).apply {
+        text = LogPresentation.parentLine(row, nowMillis)
+        textSize = 20f
+        setTextColor(if (row.kind == LogKind.FAILED) Color.parseColor(BAD) else Color.BLACK)
+        setPadding(0, dp(c, 8), 0, dp(c, 8))
     }
 
     /** 맨 위 상태 카드. 색만으로 뜻을 전하지 않도록 큰 기호(✓ / ! / ✕)를 같이 쓴다. */
     fun statusCard(c: Context, level: StatusLevel, title: String, sub: String): LinearLayout {
-        val (bg, fg, icon) = when (level) {
-            StatusLevel.GOOD -> Triple("#2E7D32", Color.WHITE, "✓")
-            StatusLevel.WARN -> Triple("#F9A825", Color.BLACK, "!")
-            StatusLevel.BAD -> Triple("#C62828", Color.WHITE, "✕")
-        }
+        val (bg, fg, _) = levelStyle(level)
         return LinearLayout(c).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -82,11 +146,7 @@ object Ui {
             setPadding(dp(c, 20), dp(c, 20), dp(c, 20), dp(c, 20))
             minimumHeight = dp(c, 120)
             layoutParams = fullWidth(c, 0)
-            addView(TextView(c).apply {
-                text = icon; textSize = 56f; setTextColor(fg)
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(0, 0, dp(c, 20), 0)
-            })
+            addView(statusBadge(c, level))
             addView(LinearLayout(c).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -97,7 +157,7 @@ object Ui {
     }
 
     /** 작은 안내 띠 (데모 모드 표시 등). */
-    fun strip(c: Context, s: String, fill: String = "#E1BEE7") = TextView(c).apply {
+    fun strip(c: Context, s: String, fill: String = "#E0E0E0") = TextView(c).apply {
         text = s; textSize = 16f; setTextColor(Color.BLACK)
         background = rounded(c, fill, radiusDp = 8)
         setPadding(dp(c, 12), dp(c, 6), dp(c, 12), dp(c, 6))

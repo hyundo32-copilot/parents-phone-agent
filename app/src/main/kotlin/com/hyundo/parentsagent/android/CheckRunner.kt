@@ -47,6 +47,8 @@ class CheckRunner(
             val cmp = SnapshotDiff.compare(baseline, device.readAll(deep))
 
             val attempts = mutableListOf<RestoreAttempt>()
+            // 가족 알림을 실제로 보냈는지는 점검 끝에야 알 수 있어서, 실패 기록은 그때 쓴다
+            val pendingFailed = mutableListOf<PendingFailure>()
             val skipped = mutableListOf<SkippedItem>()
             val deferred = mutableListOf<SettingKey>()
             val decidedKeys = mutableSetOf<SettingKey>()
@@ -91,7 +93,11 @@ class CheckRunner(
                         val a = restorer.restore(dev)
                         attempts += a
                         if (a.key == SettingKey.AIRPLANE_MODE && a.result == AttemptResult.SUCCESS) airplaneRestored = true
-                        store.appendLog(logLine(a))
+                        when (a.result) {
+                            AttemptResult.SUCCESS -> store.appendLog(logLine(a), LogKind.FIXED, ParentText.fixed(a.key.label))
+                            AttemptResult.FAILED -> pendingFailed += PendingFailure(logLine(a), a.key.label)
+                            AttemptResult.STOPPED_BY_USER -> store.appendLog(logLine(a))
+                        }
                         announcer.speak(
                             when (a.result) {
                                 AttemptResult.SUCCESS -> "${dev.key.label}을 원래대로 되돌렸어요"
@@ -102,7 +108,8 @@ class CheckRunner(
                     }
                     is Decision.Skip -> {
                         if (d.pause) history.pause(dev.key)
-                        store.appendLog("${dev.key.label}: ${d.reason.text}")
+                        val line = "${dev.key.label}: ${d.reason.text}"
+                        if (ParentText.isLimit(d.reason)) pendingFailed += PendingFailure(line, dev.key.label) else store.appendLog(line)
                         if (d.notify && history.markNotified(dev.key, now.toLocalDate(), d.reason.name)) {
                             skipped += SkippedItem(dev, d.reason)
                         }
@@ -127,6 +134,7 @@ class CheckRunner(
                 remaining = remaining,
                 unreadable = cmp.unreadable,
             )
+            var familyNotified = false
             val summary = if (stopped) {
                 "부모님이 중단해서 멈췄어요"
             } else if (report.needsEscalation()) {
@@ -137,6 +145,7 @@ class CheckRunner(
                 } else {
                     announcer.speak("아들한테 연락했어요, 잠시만 기다려요")
                     store.appendLog("현도에게 알림: $outcome")
+                    familyNotified = outcome == SendOutcome.SENT || outcome == SendOutcome.SENT_RAW
                     "현도에게 알렸어요 ($outcome)"
                 }
             } else if (deferred.isNotEmpty()) {
@@ -146,12 +155,21 @@ class CheckRunner(
             } else {
                 "되돌렸어요"
             }
+            pendingFailed.forEach { store.appendLog(it.text, LogKind.FAILED, parentMessage(it, familyNotified)) }
+            if (!stopped && cmp.deviations.isEmpty() && cmp.unreadable.isEmpty()) {
+                store.appendLog("점검: 모두 정상", LogKind.INFO, ParentText.NO_PROBLEM)
+            }
             return CheckOutcome.Done(summary)
         } finally {
             status.idle()
             running.set(false)
         }
     }
+
+    private class PendingFailure(val text: String, val label: String)
+
+    /** 부모님용 문구는 여기 한 곳에서 만든다. */
+    private fun parentMessage(f: PendingFailure, familyNotified: Boolean) = ParentText.failed(f.label, familyNotified)
 
     /** method(어떻게 시도했고 왜 안 됐는지 진단)를 뒤에 붙인다. 텔레그램이 없으면 이 로그가 유일한 확인 경로다. */
     private fun logLine(a: RestoreAttempt): String {

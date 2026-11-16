@@ -2,6 +2,7 @@ package com.hyundo.parentsagent.android
 
 import com.hyundo.parentsagent.core.Deviation
 import com.hyundo.parentsagent.core.LastCheckGrade
+import com.hyundo.parentsagent.core.LogKind
 import com.hyundo.parentsagent.core.RestoreAttempt
 import com.hyundo.parentsagent.core.RestoreHistory
 import com.hyundo.parentsagent.core.SettingKey
@@ -37,6 +38,9 @@ interface CheckStore {
     fun history(): RestoreHistory
     fun saveHistory(h: RestoreHistory)
     fun appendLog(text: String)
+
+    /** 종류와 부모님용 문장을 함께 남긴다. 구현이 안 받으면 원문만 남긴다. */
+    fun appendLog(text: String, kind: LogKind, parentText: String?) = appendLog(text)
 
     /** 마지막 점검의 시각·결과 등급. 화면의 상태 카드가 앱을 다시 켜도 같은 상태를 보여 주려고 저장한다. */
     fun saveLastResult(atMillis: Long, grade: LastCheckGrade) {}
