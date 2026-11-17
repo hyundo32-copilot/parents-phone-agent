@@ -16,9 +16,13 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
-import android.widget.Toast
 import com.hyundo.parentsagent.BuildConfig
+import com.hyundo.parentsagent.core.CheckSummary
 import com.hyundo.parentsagent.core.LogPresentation
+import com.hyundo.parentsagent.core.ResultNote
+import com.hyundo.parentsagent.core.ResultNotes
+import com.hyundo.parentsagent.core.SpeechText
+import com.hyundo.parentsagent.core.StatusCardState
 import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.core.StatusCard
@@ -27,6 +31,7 @@ import com.hyundo.parentsagent.core.Symptom
 import com.hyundo.parentsagent.core.Thresholds
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.time.ZoneId
 import java.util.Locale
 
 class MainActivity : android.app.Activity() {
@@ -39,6 +44,13 @@ class MainActivity : android.app.Activity() {
     private lateinit var banner: LinearLayout
     private lateinit var bannerText: TextView
     private val statusListener: () -> Unit = { renderBanner() }
+    // Announcer는 프로세스 공유라 화면이 shutdown 하지 않는다. 화면이 시작한 발화(읽어 주기·끝 음성)만 onPause에서 멈춘다.
+    private var resumed = false
+    private var ownSpeechId: String? = null
+    /** 점검(증상 분류 포함)이 도는 동안 "점검하는 중" 표시. 화면이 다시 만들어지면 사라진다. */
+    private var checking = false
+    /** 가족 영역 버튼 바로 아래 피드백 (기준 저장·다시 보내기). 맨 위 결과 카드로는 쓰지 않는다. */
+    private var familyNote: ResultNote? = null
 
     private val store get() = AgentRuntime.store
 
@@ -72,12 +84,16 @@ class MainActivity : android.app.Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         StatusBus.addListener(statusListener)
         render()
         if (!store.consented) askConsent()
     }
 
     override fun onPause() {
+        resumed = false
+        AgentRuntime.announcer.stopUtterance(ownSpeechId)
+        ownSpeechId = null
         StatusBus.removeListener(statusListener)
         super.onPause()
     }
@@ -114,6 +130,8 @@ class MainActivity : android.app.Activity() {
 
         // 부모님 영역(카드별): 상태 → (데모 띠) → 권한 안내 → 큰 버튼 2개 → 할 일 안내 → 최근 고친 일 → 취침 시간
         renderStatusCard(accOn, policyOn, snap != null, pausedKeys.size)
+        renderCheckingNotice()
+        renderResultCard()
         renderPermissionNotice(accOn, policyOn)
         renderActions()
         renderTodoCards(snap != null, pausedKeys)
@@ -136,8 +154,40 @@ class MainActivity : android.app.Activity() {
             ),
         )
         content.addView(Ui.text(this, "폰 도우미", 16f).apply { setTextColor(Color.parseColor("#546E7A")) })
-        content.addView(Ui.statusCard(this, state.level, state.title, state.sub))
+        content.addView(Ui.statusCard(this, state.level, state.title, state.sub) { speakStatus(state) })
         if (store.demoMode) content.addView(Ui.strip(this, "데모 모드 (기준 시간이 짧아요)"))
+    }
+
+    private fun renderCheckingNotice() {
+        if (!checking) return
+        content.addView(Ui.card(this, Ui.text(this, "점검하는 중이에요. 잠시만 기다려 주세요", 22f, bold = true)))
+    }
+
+    /** 결과 카드 한 장. 그 뒤에 예약·잠금 해제 점검이 상태 카드를 갱신했으면 이 카드는 낡았으니 지운다. */
+    private fun renderResultCard() {
+        val note = store.resultNote ?: return
+        if (ResultNotes.isStale(note, store.lastResultMillis)) { store.clearResultNote(); return }
+        val timeText = StatusCard.friendlyTime(note.atMillis, System.currentTimeMillis(), ZoneId.systemDefault())
+        // [확인했어요]는 카드만 지운다. 상태 카드의 빨강(마지막 점검 결과)은 다음 점검이 성공해야 풀린다.
+        content.addView(Ui.resultCard(this, note, timeText) { store.clearResultNote(); render() })
+    }
+
+    /** 상태 카드를 소리로 읽는다. 버튼으로만 시작한다. 실패하면 결과 카드에 안내를 남긴다. */
+    private fun speakStatus(state: StatusCardState) {
+        val text = SpeechText.forSpeech(SpeechText.statusCard(state, store.lastResultMillis, System.currentTimeMillis(), ZoneId.systemDefault()))
+        speakOwned(text)
+    }
+
+    private fun speakOwned(text: String) {
+        AgentRuntime.announcer.stopUtterance(ownSpeechId)
+        ownSpeechId = AgentRuntime.announcer.speakOwned(text) { ok -> if (!ok) runOnUiThread { showTtsFailed() } }
+    }
+
+    private fun showTtsFailed() {
+        val now = System.currentTimeMillis()
+        val cur = store.resultNote?.takeIf { !ResultNotes.isStale(it, store.lastResultMillis) }
+        store.saveResultNote(cur?.let { ResultNotes.withTtsFailed(it) } ?: ResultNotes.ttsFailed(now))
+        render()
     }
 
     /** 접근성이 꺼지면 앱이 아무것도 못 고치므로 상태 카드 바로 아래 가장 먼저 보이게 한다. 켜져 있으면 그리지 않는다. */
@@ -225,15 +275,21 @@ class MainActivity : android.app.Activity() {
         if (queued > 0) {
             body.addView(Ui.text(c, "아직 못 보낸 알림 ${queued}건 (망이 돌아오면 다시 보내요)", 18f))
             body.addView(Ui.manageButton(c, "지금 다시 보내기") {
-                AgentRuntime.flushOutboxAsync(this); toast("다시 보내는 중이에요")
+                familyNote = ResultNotes.resendStarted(System.currentTimeMillis()); render()
+                AgentRuntime.flushOutboxAsync(this) { remaining ->
+                    runOnUiThread { familyNote = ResultNotes.resendDone(remaining, System.currentTimeMillis()); render() }
+                }
             })
+        }
+        familyNote?.let { n ->
+            body.addView(Ui.text(c, n.text, 18f, bold = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE })
         }
         content.addView(
             Ui.card(
                 c,
                 Ui.collapsible(
                     c, "▸ 가족용 (길게 눌러서 열기)", "▾ 가족용 (눌러서 닫기)", adminOpen,
-                    longPressToOpen = true, onToggle = { adminOpen = it }, body = body,
+                    longPressToOpen = true, onToggle = { adminOpen = it; if (!it) familyNote = null }, body = body,
                 ),
             ),
         )
@@ -250,7 +306,16 @@ class MainActivity : android.app.Activity() {
         val logBody = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         val rows = LogPresentation.adminRows(store.log(), 20)
         if (rows.isEmpty()) logBody.addView(Ui.text(c, "아직 기록이 없어요."))
-        else logBody.addView(Ui.manageButton(c, "복사") { copyAdminLog() })
+        else {
+            // 안드로이드 13+는 시스템이 복사 안내를 띄운다. 앱은 버튼 글자만 잠깐 바꾼다 (토스트·결과 카드는 쓰지 않는다).
+            lateinit var copyBtn: android.widget.Button
+            copyBtn = Ui.manageButton(c, "복사") {
+                copyAdminLog()
+                copyBtn.text = "복사했어요 ✓"
+                copyBtn.postDelayed({ copyBtn.text = "복사" }, 2_000)
+            }
+            logBody.addView(copyBtn)
+        }
         rows.forEach { logBody.addView(Ui.text(c, "${fmt(it.timeMillis)}  ${LogPresentation.formatCount(it.text, it.count)}", 18f)) }
         body.addView(
             Ui.collapsible(c, "▸ 전체 기록 (최근 20건)", "▾ 전체 기록 (최근 20건)", logOpen, longPressToOpen = false, onToggle = { logOpen = it }, body = logBody),
@@ -293,7 +358,8 @@ class MainActivity : android.app.Activity() {
             keys.forEach { h.resume(it) }
             store.saveHistory(h)
             store.appendLog("자동 복원을 다시 켰어요: " + keys.joinToString(", ") { it.label })
-            runOnUiThread { render(); toast("다시 자동으로 고칠게요") }
+            store.saveResultNote(ResultNotes.autoFixResumed(System.currentTimeMillis()))
+            runOnUiThread { render() }
         }
     }
 
@@ -328,7 +394,7 @@ class MainActivity : android.app.Activity() {
                     h.resumeAll()
                     store.saveHistory(h)
                     store.appendLog("기준 상태를 새로 찍었어요")
-                    runOnUiThread { render(); toast("기준을 저장했어요") }
+                    runOnUiThread { familyNote = ResultNotes.baselineSaved(System.currentTimeMillis()); render() }
                 }
             }
             .setNegativeButton("취소", null)
@@ -342,10 +408,11 @@ class MainActivity : android.app.Activity() {
             .setView(input)
             .setPositiveButton("확인") { _, _ ->
                 val words = input.text.toString()
+                checking = true; render() // 분류가 망 상태에 따라 수 초 걸릴 수 있어 먼저 표시한다
                 AgentRuntime.async {
-                    // Liner 분류. 망·키가 없으면 OTHER → 같은 점검 흐름 (규칙 엔진만 동작)
+                    // Liner 분류. 망·키가 없으면 OTHER → 같은 점검 흐름 (규칙 엔진만 동작). 분류 결과는 관리용 기록으로만 남긴다.
                     val symptom = runCatching { AgentRuntime.liner.classify(words) }.getOrDefault(Symptom.OTHER)
-                    runOnUiThread { toast("분류: ${symptom.label}") }
+                    store.appendLog("증상 분류: ${symptom.label}")
                     startCheck(Trigger.SYMPTOM, symptom)
                 }
             }
@@ -354,19 +421,36 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun startCheck(trigger: Trigger, symptom: Symptom?) {
+        runOnUiThread { checking = true; render() }
         AgentRuntime.runCheckAsync(this, trigger, symptom) { outcome ->
+            val now = System.currentTimeMillis()
+            // 카드는 화면이 아니라 Store에 저장한다: 점검 중에 화면이 다시 만들어져도 새 화면이 읽어 간다.
+            // 이미 점검 중(AlreadyRunning)은 카드를 만들지 않는다 (진행 중인 점검은 이 화면 콜백이 없어 카드가 영영 남는다).
+            // 이름·내부 값이 든 outcome.summary는 부모님 화면에 쓰지 않는다.
+            val detail = (outcome as? CheckOutcome.Done)?.detail
+            val note: ResultNote? = when (outcome) {
+                CheckOutcome.NoBaseline -> ResultNotes.noBaseline(now)
+                CheckOutcome.NoConsent -> ResultNotes.noConsent(now)
+                CheckOutcome.AlreadyRunning -> null
+                is CheckOutcome.Done -> detail?.let { ResultNotes.forCheck(it, now) }
+            }
+            if (note != null) store.saveResultNote(note)
             runOnUiThread {
-                toast(
-                    when (outcome) {
-                        CheckOutcome.NoBaseline -> "먼저 기준을 찍어 주세요"
-                        CheckOutcome.NoConsent -> "먼저 동의가 필요해요"
-                        CheckOutcome.AlreadyRunning -> "이미 점검 중이에요"
-                        is CheckOutcome.Done -> outcome.summary
-                    },
-                )
+                checking = false
+                if (note != null && detail != null) speakCheckEnd(detail, note)
                 render()
             }
         }
+    }
+
+    /**
+     * 점검 끝 음성: 부모님이 직접 시작한 점검(이 함수는 [startCheck]에서만 불린다)이고 앱이 앞에 있을 때만.
+     * 항목별 안내와 겹치지 않게 [ResultNotes.shouldSpeakEnd]인 경우만 말한다.
+     * TalkBack이 켜져 있으면 자동 음성 대신 결과 카드의 liveRegion이 읽는다.
+     */
+    private fun speakCheckEnd(detail: CheckSummary, note: ResultNote) {
+        if (!resumed || Announcer.isTalkBackOn(this) || !ResultNotes.shouldSpeakEnd(detail)) return
+        speakOwned(SpeechText.forSpeech(note.text))
     }
 
     private fun isAccessibilityOn(): Boolean =
@@ -378,10 +462,8 @@ class MainActivity : android.app.Activity() {
         val text = LogPresentation.adminCopyText(store.log(), 20)
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("전체 기록", text))
-        toast("복사했어요")
     }
 
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
     private fun fmt(ms: Long) = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(Date(ms))
     private fun hm(min: Int) = "%02d:%02d".format(min / 60, min % 60)
 }

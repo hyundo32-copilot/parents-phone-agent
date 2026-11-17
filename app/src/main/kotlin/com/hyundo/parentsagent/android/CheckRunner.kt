@@ -15,7 +15,8 @@ sealed interface CheckOutcome {
     data object NoBaseline : CheckOutcome
     data object NoConsent : CheckOutcome
     data object AlreadyRunning : CheckOutcome
-    data class Done(val summary: String) : CheckOutcome
+    /** [summary]는 가족용 원문(기록·테스트용). 부모님 화면 문장은 [detail]로 `ResultNotes.forCheck`가 만든다. */
+    data class Done(val summary: String, val detail: CheckSummary? = null) : CheckOutcome
 }
 
 /** 점검 한 번: 읽기 → 비교 → (규칙 엔진 판정) → 복원 → 재확인 → 필요하면 에스컬레이션. */
@@ -157,10 +158,12 @@ class CheckRunner(
                 unreadable = cmp.unreadable,
             )
             var familyNotified = false
+            var escalated = false
             val summary = if (stopped) {
                 "부모님이 중단해서 멈췄어요"
             } else if (report.needsEscalation()) {
                 val outcome = sender.send(EscalationMessage.build(report))
+                escalated = true
                 if (outcome == SendOutcome.REJECTED) {
                     store.appendLog("알림 설정 오류: 현도에게 알리지 못했어요")
                     "알림 설정 오류로 현도에게 못 알렸어요"
@@ -185,7 +188,16 @@ class CheckRunner(
             if (trigger == Trigger.MANUAL || trigger == Trigger.SYMPTOM) runCatching { returner.returnToAppWithReport() }.getOrNull()?.let { r ->
                 runCatching { store.appendLog(r.logLine()) }
             }
-            return CheckOutcome.Done(summary)
+            val detail = CheckSummary(
+                fixed = attempts.count { it.result == AttemptResult.SUCCESS },
+                failed = pendingFailed.size,
+                deferredLabels = deferred.map { it.label },
+                stopped = stopped,
+                escalated = escalated,
+                familyNotified = familyNotified,
+                allClear = cmp.deviations.isEmpty() && cmp.unreadable.isEmpty(),
+            )
+            return CheckOutcome.Done(summary, detail)
         } finally {
             status.idle()
             running.set(false)

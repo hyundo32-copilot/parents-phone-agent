@@ -333,4 +333,81 @@ class CheckRunnerTest {
         assertEquals(SettingValue.Level.current(5), f.current[SettingKey.VOLUME_RING])
         assertEquals(1, f.sent.size)
     }
+
+    // --- Done.detail (부모님 화면 문장의 재료) ---
+
+    private fun detailOf(f: Fake, trigger: Trigger = Trigger.SCHEDULED) = (f.runner().run(trigger) as CheckOutcome.Done).detail!!
+
+    @Test fun `detail - 하나 고치고 끝나면 fixed 1, 알림 없음`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        val d = detailOf(f)
+        assertEquals(1, d.fixed); assertEquals(0, d.failed)
+        assertFalse(d.escalated); assertFalse(d.familyNotified); assertFalse(d.stopped)
+        assertFalse(d.allClear)
+        assertTrue(d.deferredLabels.isEmpty())
+    }
+
+    @Test fun `detail - 이탈이 없으면 allClear`() {
+        val d = detailOf(Fake())
+        assertTrue(d.allClear)
+        assertEquals(0, d.fixed); assertEquals(0, d.failed)
+    }
+
+    @Test fun `detail - 복원 실패와 알림 성공이면 failed 1, familyNotified`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.failKeys = setOf(SettingKey.WIFI)
+        val d = detailOf(f)
+        assertEquals(0, d.fixed); assertEquals(1, d.failed)
+        assertTrue(d.escalated); assertTrue(d.familyNotified)
+    }
+
+    @Test fun `detail - 알림이 거부되거나 대기열에 들어가면 알렸다고 하지 않는다`() {
+        for (outcome in listOf(SendOutcome.REJECTED, SendOutcome.QUEUED)) {
+            val f = Fake()
+            f.current[SettingKey.WIFI] = flag(false)
+            f.failKeys = setOf(SettingKey.WIFI)
+            f.sendOutcome = outcome
+            val d = detailOf(f)
+            assertTrue("$outcome", d.escalated)
+            assertFalse("$outcome", d.familyNotified)
+        }
+    }
+
+    @Test fun `detail - 미룬 항목은 deferredLabels에 담긴다`() {
+        val f = Fake()
+        f.blocker = "화면 꺼짐"
+        f.current[SettingKey.WIFI] = flag(false)
+        val d = detailOf(f)
+        assertEquals(listOf(SettingKey.WIFI.label), d.deferredLabels)
+        assertEquals(0, d.fixed)
+        assertFalse(d.escalated)
+    }
+
+    @Test fun `detail - 중단하면 stopped, 알림 없음`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.current[SettingKey.MOBILE_DATA] = flag(false)
+        f.stopAfterRestore = true
+        val d = detailOf(f)
+        assertTrue(d.stopped)
+        assertFalse(d.escalated)
+    }
+
+    @Test fun `detail - 읽지 못한 항목만 있으면 allClear가 아니다`() {
+        val f = Fake()
+        f.current.remove(SettingKey.SIM_READY)
+        val d = detailOf(f)
+        assertFalse(d.allClear)
+        assertEquals(0, d.fixed); assertEquals(0, d.failed)
+    }
+
+    @Test fun `detail 추가로 summary 문자열은 바뀌지 않는다`() {
+        val f = Fake()
+        f.current[SettingKey.WIFI] = flag(false)
+        f.failKeys = setOf(SettingKey.WIFI)
+        val o = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
+        assertEquals("현도에게 알렸어요 (SENT)", o.summary)
+    }
 }

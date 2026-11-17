@@ -16,6 +16,7 @@ import com.hyundo.parentsagent.core.LogKind
 import com.hyundo.parentsagent.core.LogPresentation
 import com.hyundo.parentsagent.core.LogRow
 import com.hyundo.parentsagent.core.LongPressGate
+import com.hyundo.parentsagent.core.ResultNote
 import com.hyundo.parentsagent.core.StatusLevel
 
 /** 큰 글씨·큰 버튼 (부모님이 보는 화면). 레이아웃 XML 없이 코드로 만든다. */
@@ -136,23 +137,78 @@ object Ui {
         setPadding(0, dp(c, 8), 0, dp(c, 8))
     }
 
-    /** 맨 위 상태 카드. 색만으로 뜻을 전하지 않도록 큰 기호(✓ / ! / ✕)를 같이 쓴다. */
-    fun statusCard(c: Context, level: StatusLevel, title: String, sub: String): LinearLayout {
+    /**
+     * 맨 위 상태 카드. 색만으로 뜻을 전하지 않도록 큰 기호(✓ / ! / ✕)를 같이 쓴다.
+     * [onSpeak]가 있으면 카드 아래에 전체 폭 [읽어 주기] 버튼을 둔다. 버튼은 어느 색 위에서도 보이게 흰 바탕·검은 글씨·회색 테두리.
+     */
+    fun statusCard(c: Context, level: StatusLevel, title: String, sub: String, onSpeak: (() -> Unit)? = null): LinearLayout {
         val (bg, fg, _) = levelStyle(level)
         return LinearLayout(c).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             background = rounded(c, bg, radiusDp = 20)
             setPadding(dp(c, 20), dp(c, 20), dp(c, 20), dp(c, 20))
-            minimumHeight = dp(c, 120)
             layoutParams = fullWidth(c, 0)
-            addView(statusBadge(c, level))
             addView(LinearLayout(c).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                addView(TextView(c).apply { text = title; textSize = 30f; setTextColor(fg); setTypeface(typeface, android.graphics.Typeface.BOLD) })
-                addView(TextView(c).apply { text = sub; textSize = 20f; setTextColor(fg); setPadding(0, dp(c, 4), 0, 0) })
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(c, 80)
+                addView(statusBadge(c, level))
+                addView(LinearLayout(c).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(c).apply { text = title; textSize = 30f; setTextColor(fg); setTypeface(typeface, android.graphics.Typeface.BOLD) })
+                    addView(TextView(c).apply { text = sub; textSize = 20f; setTextColor(fg); setPadding(0, dp(c, 4), 0, 0) })
+                })
             })
+            if (onSpeak != null) addView(Button(c).apply {
+                text = "🔊 읽어 주기"
+                textSize = 22f
+                isAllCaps = false
+                setTextColor(Color.BLACK)
+                background = rounded(c, "#FFFFFF", radiusDp = 12, strokeColor = GREY_STROKE)
+                minimumHeight = dp(c, 64)
+                contentDescription = "상태를 소리로 읽어 주기"
+                layoutParams = fullWidth(c, 12)
+                setOnClickListener { onSpeak() }
+            })
+        }
+    }
+
+    /**
+     * 부모님이 방금 한 동작의 결과 카드. 왼쪽 띠 색은 종류(FIXED 초록, FAILED 빨강, INFO 파랑)이고 기호를 같이 쓴다.
+     * 본문은 줄임 없이 다 보인다. 카드 전체가 하나의 contentDescription이며 바뀔 때 TalkBack이 읽도록 liveRegion을 준다.
+     */
+    fun resultCard(c: Context, note: ResultNote, timeText: String, onDismiss: () -> Unit): LinearLayout {
+        val (band, icon) = when (note.kind) {
+            LogKind.FIXED -> OK to "✓"
+            LogKind.FAILED -> BAD to "✕"
+            else -> PRIMARY to "ℹ"
+        }
+        val body = LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(text(c, note.text, 24f, bold = true))
+            if (note.extra != null) addView(text(c, note.extra, 18f))
+            addView(text(c, timeText, 18f).apply { setTextColor(Color.parseColor(GREY_TEXT)) })
+        }
+        val row = LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(View(c).apply {
+                setBackgroundColor(Color.parseColor(band))
+                layoutParams = LinearLayout.LayoutParams(dp(c, 8), ViewGroup.LayoutParams.MATCH_PARENT).apply { rightMargin = dp(c, 12) }
+            })
+            addView(TextView(c).apply {
+                text = icon; textSize = 28f; setTextColor(Color.parseColor(band))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(c, 4), dp(c, 12), 0)
+            })
+            addView(body)
+        }
+        return card(c, row, manageButton(c, "확인했어요", onDismiss)).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isFocusable = true
+            contentDescription = listOfNotNull(note.text, note.extra, timeText).joinToString(". ")
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
     }
 

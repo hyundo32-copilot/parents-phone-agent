@@ -4,6 +4,8 @@ import android.content.Context
 import com.hyundo.parentsagent.core.LastCheckGrade
 import com.hyundo.parentsagent.core.LogEntry
 import com.hyundo.parentsagent.core.LogKind
+import com.hyundo.parentsagent.core.ResultNote
+import com.hyundo.parentsagent.core.ResultNotes
 import com.hyundo.parentsagent.core.RestoreHistory
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.net.Outbox
@@ -34,6 +36,18 @@ class Store(context: Context) : CheckStore {
     override fun saveLastResult(atMillis: Long, grade: LastCheckGrade) {
         p.edit().putLong("lastResultAt", atMillis).putString("lastResultGrade", grade.name).apply()
     }
+
+    /** 부모님이 방금 한 동작의 결과 카드 한 장 (없으면 null). 깨진 값은 읽을 때 지운다. */
+    val resultNote: ResultNote?
+        get() {
+            val raw = p.getString("result_note", null) ?: return null
+            val n = ResultNotes.decode(raw)
+            if (n == null) clearResultNote()
+            return n
+        }
+
+    fun saveResultNote(n: ResultNote) = p.edit().putString("result_note", ResultNotes.encode(n)).apply()
+    fun clearResultNote() = p.edit().remove("result_note").apply()
 
     /** 마지막으로 안부 신호를 보낸 슬롯의 날짜 (하루 1회 중복 방지). */
     var lastHeartbeatSlotDate: LocalDate?

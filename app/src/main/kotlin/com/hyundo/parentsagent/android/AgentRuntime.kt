@@ -68,9 +68,13 @@ object AgentRuntime {
         async { onDone(runner.run(trigger, symptom)) }
     }
 
-    fun flushOutboxAsync(context: Context) {
+    /** [onDone]에는 보낸 뒤에도 남은 알림 건수를 준다 (백그라운드 스레드에서 불린다). */
+    fun flushOutboxAsync(context: Context, onDone: (remaining: Int) -> Unit = {}) {
         init(context)
-        async { sender.flush(); heartbeat.trySend(LocalDateTime.now()) }
+        async {
+            sender.flush(); heartbeat.trySend(LocalDateTime.now())
+            onDone(store.outbox().size)
+        }
     }
 
     /** 안부 신호 전송 시도. 알람·망 복구·잠금 해제 때 부른다. 보낼 차례가 아니면 아무것도 안 한다. */
