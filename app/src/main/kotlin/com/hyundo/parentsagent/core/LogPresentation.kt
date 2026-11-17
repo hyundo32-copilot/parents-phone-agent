@@ -1,6 +1,9 @@
 package com.hyundo.parentsagent.core
 
+import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** 화면에 그릴 한 줄. count는 바로 이어서 반복된 횟수. */
 data class LogRow(val timeMillis: Long, val text: String, val count: Int, val kind: LogKind = LogKind.DEV)
@@ -48,6 +51,16 @@ object LogPresentation {
     /** 관리 영역 줄. text 기준으로 묶고 limit건까지. */
     fun adminRows(entries: List<LogEntry>, limit: Int = 20): List<LogRow> =
         collapseRepeats(entries, { it.text }, { it.timeMillis }, { it.text }).take(limit)
+
+    /** 복사용 한 줄: "11월 17일 08:06 <내용>" (묶인 줄은 "(N번)"까지 화면과 같다). */
+    fun adminCopyLine(row: LogRow, zone: ZoneId = ZoneId.systemDefault()): String =
+        "${ADMIN_TIME.withZone(zone).format(Instant.ofEpochMilli(row.timeMillis))} ${formatCount(row.text, row.count)}"
+
+    /** 관리용 기록 복사 텍스트. 화면에 보이는 [adminRows]와 같은 줄들을 한 줄에 하나씩. */
+    fun adminCopyText(entries: List<LogEntry>, limit: Int = 20, zone: ZoneId = ZoneId.systemDefault()): String =
+        adminRows(entries, limit).joinToString("\n") { adminCopyLine(it, zone) }
+
+    private val ADMIN_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("M월 d일 HH:mm", Locale.KOREA)
 
     fun kindSymbol(kind: LogKind): String = when (kind) {
         LogKind.FIXED -> "✓"

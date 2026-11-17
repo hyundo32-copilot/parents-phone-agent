@@ -25,6 +25,13 @@ class RestoreHistory {
         deviationDays.getOrPut(key) { HashSet() }.add(date)
     }
 
+    fun hasDeviation(key: SettingKey, date: LocalDate): Boolean = deviationDays[key]?.contains(date) == true
+
+    /** 미룬 항목은 이탈 일수에 안 세므로, 판정 때 기록한 오늘의 이탈을 되돌린다. */
+    fun forgetDeviation(key: SettingKey, date: LocalDate) {
+        deviationDays[key]?.remove(date)
+    }
+
     /** today 를 포함해 하루도 빠짐없이 이탈이 이어진 일수. */
     fun consecutiveDeviationDays(key: SettingKey, today: LocalDate): Int {
         val days = deviationDays[key] ?: return 0

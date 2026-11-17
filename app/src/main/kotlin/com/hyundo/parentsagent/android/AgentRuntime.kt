@@ -46,6 +46,7 @@ object AgentRuntime {
         runner = CheckRunner(
             store, reader, AndroidScreenGate(app), { deep -> Restorer(app, reader, deep) },
             sender, announcer, StatusBus, StopController,
+            returner = AccessibilityAppReturner,
         )
         initialized = true
     }

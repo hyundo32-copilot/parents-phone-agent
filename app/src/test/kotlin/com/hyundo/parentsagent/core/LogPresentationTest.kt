@@ -87,4 +87,25 @@ class LogPresentationTest {
         val t = java.time.ZonedDateTime.of(2026, 11, 15, 15, 10, 0, 0, zone).toInstant().toEpochMilli()
         assertEquals("✓ 오늘 오후 3:10 — 고쳤어요 (2번)", LogPresentation.parentLine(LogRow(t, "고쳤어요", 2, LogKind.FIXED), now, zone))
     }
+
+    @Test fun `복사 텍스트는 화면의 최근 20건과 같은 줄이다`() {
+        val zone = java.time.ZoneId.of("Asia/Seoul")
+        val base = java.time.ZonedDateTime.of(2026, 11, 17, 8, 6, 0, 0, zone).toInstant().toEpochMilli()
+        val entries = (0 until 25).map { LogEntry(base - it * 60_000L, "기록 $it") }
+        val rows = LogPresentation.adminRows(entries, 20)
+        val lines = LogPresentation.adminCopyText(entries, 20, zone).split("\n")
+        assertEquals(20, lines.size)
+        assertEquals("11월 17일 08:06 기록 0", lines[0])
+        assertEquals("11월 17일 07:47 기록 19", lines[19])
+        assertEquals(rows.map { LogPresentation.adminCopyLine(it, zone) }, lines)
+    }
+
+    @Test fun `복사 텍스트도 이어진 같은 줄은 묶고 횟수를 붙인다`() {
+        val zone = java.time.ZoneId.of("Asia/Seoul")
+        val base = java.time.ZonedDateTime.of(2026, 1, 5, 23, 5, 0, 0, zone).toInstant().toEpochMilli()
+        val entries = listOf(LogEntry(base, "와이파이"), LogEntry(base - 1000, "와이파이"), LogEntry(base - 2000, "다른 줄"))
+        assertEquals("1월 5일 23:05 와이파이 (2번)\n1월 5일 23:04 다른 줄", LogPresentation.adminCopyText(entries, 20, zone))
+    }
+
+    @Test fun `기록이 없으면 복사 텍스트는 빈 문자열`() = assertEquals("", LogPresentation.adminCopyText(emptyList()))
 }

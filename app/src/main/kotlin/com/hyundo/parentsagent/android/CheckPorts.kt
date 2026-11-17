@@ -4,6 +4,7 @@ import com.hyundo.parentsagent.core.Deviation
 import com.hyundo.parentsagent.core.LastCheckGrade
 import com.hyundo.parentsagent.core.LogKind
 import com.hyundo.parentsagent.core.RestoreAttempt
+import com.hyundo.parentsagent.core.ReturnReport
 import com.hyundo.parentsagent.core.RestoreHistory
 import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.SettingValue
@@ -27,8 +28,21 @@ interface ScreenGate {
     fun accessibilityBlocker(): String?
 }
 
+/** 점검이 끝나면 접근성이 열어 둔 시스템 화면에서 앱 화면으로 돌아온다. 이미 앱이거나 다른 앱이면 아무것도 안 한다. */
+interface AppReturner {
+    fun returnToApp()
+
+    /** 결과를 돌려주는 쪽. 결과를 모르는 구현은 returnToApp만 하고 null을 돌려준다. */
+    fun returnToAppWithReport(): ReturnReport? { returnToApp(); return null }
+}
+
+object NoAppReturner : AppReturner {
+    override fun returnToApp() {}
+}
+
 interface RestoreExecutor {
-    fun restore(dev: Deviation): RestoreAttempt
+    /** @param apiOnly 화면을 못 쓰는 상황이라 일반 API만 시도하고, 안 되면 DEFERRED로 돌려준다. */
+    fun restore(dev: Deviation, apiOnly: Boolean = false): RestoreAttempt
 }
 
 interface CheckStore {

@@ -35,6 +35,8 @@ class CheckRunnerTest {
         var failKeys = setOf<SettingKey>()
         var onRestore: (Deviation) -> Unit = {}
         var stopAfterRestore = false
+        /** 화면이 꺼진 상태(apiOnly)에서 방해금지 일반 API가 먹히는지. 기본은 안 됨(알림 정책 접근 없음). */
+        var dndApiWorks = false
 
         val hist = RestoreHistory()
         val logs = mutableListOf<String>()
@@ -47,7 +49,11 @@ class CheckRunnerTest {
         override fun readAll(deep: Boolean) = current.toMap()
         override fun roamingState(): RoamingState { events += "roaming"; return roaming }
         override fun accessibilityBlocker() = blocker
-        override fun restore(dev: Deviation): RestoreAttempt {
+        override fun restore(dev: Deviation, apiOnly: Boolean): RestoreAttempt {
+            if (apiOnly && dev.key == SettingKey.DND && !dndApiWorks) {
+                events += "api-defer:${dev.key}"
+                return RestoreAttempt(dev.key, "화면 꺼짐", dev.actual, dev.actual, AttemptResult.DEFERRED)
+            }
             events += "restore:${dev.key}"
             val before = current[dev.key]!!
             if (dev.key !in failKeys) current[dev.key] = if (dev.expected is SettingValue.Level) SettingValue.Level.current(dev.expected.value) else dev.expected
@@ -259,5 +265,72 @@ class CheckRunnerTest {
         f.stopAfterRestore = true
         f.runner().run(Trigger.MANUAL)
         assertNull(f.savedResult)
+    }
+
+    // --- 08:00 벨소리 복원 실패 수정: 방해금지 먼저, 화면 꺼짐에서도 일반 API ---
+
+    @Test fun `화면이 꺼져도 방해금지 API가 되면 방해금지를 먼저 고치고 벨소리도 고친다`() {
+        val f = Fake()
+        f.blocker = "화면 꺼짐"
+        f.dndApiWorks = true
+        f.current[SettingKey.DND] = flag(true)
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("SILENT")
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(listOf("DND", "RINGER_MODE"), f.restored())
+        assertEquals(flag(false), f.current[SettingKey.DND])
+        assertEquals(SettingValue.Mode("NORMAL"), f.current[SettingKey.RINGER_MODE])
+        assertEquals(5_000L, f.lastCheckMillis) // 미룬 항목 없음
+        assertTrue(f.sent.isEmpty())
+        assertEquals(LastCheckGrade.OK, f.savedResult?.second)
+    }
+
+    @Test fun `화면이 꺼져 있고 방해금지 API가 안 되면 미룸으로 한 줄만 남기고 횟수·이탈 일수에 안 센다`() {
+        val f = Fake()
+        f.blocker = "화면 꺼짐"
+        f.current[SettingKey.DND] = flag(true)
+        val outcome = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
+        assertTrue(f.restored().isEmpty())
+        assertEquals(listOf("api-defer:DND"), f.events.filter { it.startsWith("api-defer") })
+        assertEquals(1, f.logs.count { it == "방해금지: 화면 꺼짐이라 잠금 해제 때 고칠게요" })
+        val today = now.toLocalDate()
+        assertEquals(0, f.hist.restoreCount(SettingKey.DND, today))
+        assertEquals(0, f.hist.consecutiveDeviationDays(SettingKey.DND, today))
+        assertEquals(0L, f.lastCheckMillis)
+        assertTrue(f.sent.isEmpty())
+        assertTrue(outcome.summary.contains("방해금지"))
+        assertEquals(LastCheckGrade.OK, f.savedResult?.second)
+    }
+
+    @Test fun `미룸이어도 그날 이미 기록된 이탈 일수는 지우지 않는다`() {
+        val f = Fake()
+        f.blocker = "화면 꺼짐"
+        f.current[SettingKey.DND] = flag(true)
+        f.hist.recordDeviation(SettingKey.DND, now.toLocalDate())
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(1, f.hist.consecutiveDeviationDays(SettingKey.DND, now.toLocalDate()))
+    }
+
+    @Test fun `방해금지를 고친 뒤 벨소리가 이미 정상이면 건드리지 않고 횟수에도 안 센다`() {
+        val f = Fake()
+        f.current[SettingKey.DND] = flag(true)
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("SILENT")
+        f.onRestore = { if (it.key == SettingKey.DND) f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("NORMAL") }
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(listOf("DND"), f.restored())
+        assertEquals(0, f.hist.restoreCount(SettingKey.RINGER_MODE, now.toLocalDate()))
+        assertEquals(0, f.hist.consecutiveDeviationDays(SettingKey.RINGER_MODE, now.toLocalDate()))
+        assertEquals(1, f.logs.count { it.startsWith("벨소리 모드:") && it.contains("(이미 정상)") })
+        assertTrue(f.sent.isEmpty())
+    }
+
+    @Test fun `벨소리 모드 복원이 알림 정책 접근 없음으로 실패해도 다음 항목을 계속 고친다`() {
+        val f = Fake()
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("SILENT")
+        f.current[SettingKey.VOLUME_RING] = SettingValue.Level.current(0)
+        f.failKeys = setOf(SettingKey.RINGER_MODE)
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(listOf("RINGER_MODE", "VOLUME_RING"), f.restored())
+        assertEquals(SettingValue.Level.current(5), f.current[SettingKey.VOLUME_RING])
+        assertEquals(1, f.sent.size)
     }
 }

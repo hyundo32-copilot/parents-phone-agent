@@ -31,6 +31,7 @@ class CheckRunner(
     private val sleeper: Sleeper = ThreadSleeper,
     private val clock: () -> LocalDateTime = { LocalDateTime.now(ZoneId.systemDefault()) },
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    private val returner: AppReturner = NoAppReturner,
 ) {
     private val running = AtomicBoolean(false)
 
@@ -55,15 +56,19 @@ class CheckRunner(
             val restorer = restorerFor(deep)
             var airplaneRestored = false
 
-            for (dev in cmp.deviations) {
+            // 방해금지를 벨소리 모드·볼륨보다 먼저 푼다 (우선순위 방해금지가 켜져 있으면 벨소리 모드가 SILENT로 남는다)
+            for (dev in RestorePlan.orderForRestore(cmp.deviations)) {
                 if (stop.requested) break
                 val now = clock()
 
                 // 화면이 꺼졌거나 잠겼거나 통화 중이면 접근성 수단이 필요한 항목은 잠금 해제 때로 미룬다.
                 // 판정(policy)에 넣지 않으므로 시도 횟수·이탈 일수에 안 세고 현도에게도 알리지 않는다.
-                if (dev.key in NEEDS_ACCESSIBILITY && gate.accessibilityBlocker() != null) {
+                // 방해금지만 일반 API를 먼저 시도한다 (API_FIRST): 안 되면 Restorer가 미룸으로 돌려준다.
+                val gateMode = RestorePlan.gateMode(dev.key, gate.accessibilityBlocker())
+                if (gateMode == GateMode.DEFER) {
                     deferred += dev.key
                     decidedKeys += dev.key
+                    store.appendLog(RestorePlan.deferredLogLine(dev.key.label))
                     continue
                 }
                 // 비행기 모드를 방금 풀었으면 망이 붙기 전이라 로밍을 알 수 없다. 데이터는 다음 점검에서 판정한다.
@@ -72,9 +77,19 @@ class CheckRunner(
                     decidedKeys += dev.key
                     continue
                 }
+                // 앞 항목(방해금지)을 고치는 사이 벨소리가 이미 돌아왔을 수 있다. 판정·횟수에 넣지 않고 넘긴다.
+                if (dev.key == SettingKey.RINGER_MODE || dev.key == SettingKey.VOLUME_RING) {
+                    val current = device.readAll(false)[dev.key]
+                    if (current != null && dev.expected.matches(current)) {
+                        decidedKeys += dev.key
+                        store.appendLog(RestorePlan.alreadyOkLogLine(dev.key.label))
+                        continue
+                    }
+                }
                 // 로밍은 데이터 항목을 판정하기 직전에 읽는다 (점검 시작 때 값은 낡을 수 있다). 모르면 로밍으로 본다.
                 val roaming = dev.key == SettingKey.MOBILE_DATA && device.roamingState() != RoamingState.HOME
 
+                val hadDeviationToday = history.hasDeviation(dev.key, now.toLocalDate())
                 val d = policy.decide(dev, PolicyContext(now, baseline.nightStartMin, baseline.nightEndMin, roaming, attempts.size, manual = trigger == Trigger.MANUAL))
                 decidedKeys += dev.key
                 when (d) {
@@ -87,24 +102,31 @@ class CheckRunner(
                             store.appendLog("${dev.key.label}: 부모님이 중단해서 고치지 않았어요")
                             break
                         }
+                        val a = restorer.restore(dev, apiOnly = gateMode == GateMode.API_FIRST)
+                        if (a.result == AttemptResult.DEFERRED) {
+                            // 일반 API로 못 했고 화면이 꺼져 있다: 시도·이탈 일수에 세지 않고 잠금 해제 때 다시 한다
+                            if (!hadDeviationToday) history.forgetDeviation(dev.key, now.toLocalDate())
+                            deferred += dev.key
+                            store.appendLog(RestorePlan.deferredLogLine(dev.key.label))
+                            continue
+                        }
                         // 수동 점검의 복원은 주인이 직접 누른 것이라 일일 횟수에 세지 않는다.
                         // 세면 수동으로 두 번 고친 뒤 자동 점검이 그날 멈춰 버린다.
-                        if (trigger != Trigger.MANUAL) history.recordRestoreAttempt(dev.key, now.toLocalDate())
-                        val a = restorer.restore(dev)
+                        if (trigger != Trigger.MANUAL && a.result.countsTowardDailyLimit()) history.recordRestoreAttempt(dev.key, now.toLocalDate())
                         attempts += a
                         if (a.key == SettingKey.AIRPLANE_MODE && a.result == AttemptResult.SUCCESS) airplaneRestored = true
                         when (a.result) {
                             AttemptResult.SUCCESS -> store.appendLog(logLine(a), LogKind.FIXED, ParentText.fixed(a.key.label))
                             AttemptResult.FAILED -> pendingFailed += PendingFailure(logLine(a), a.key.label)
-                            AttemptResult.STOPPED_BY_USER -> store.appendLog(logLine(a))
+                            AttemptResult.STOPPED_BY_USER, AttemptResult.DEFERRED, AttemptResult.ALREADY_OK -> store.appendLog(logLine(a))
                         }
-                        announcer.speak(
-                            when (a.result) {
-                                AttemptResult.SUCCESS -> "${dev.key.label}을 원래대로 되돌렸어요"
-                                AttemptResult.STOPPED_BY_USER -> "멈췄어요"
-                                AttemptResult.FAILED -> "${dev.key.label}을 못 고쳤어요. 아들한테 알릴게요"
-                            },
-                        )
+                        val speech = when (a.result) {
+                            AttemptResult.SUCCESS -> "${dev.key.label}을 원래대로 되돌렸어요"
+                            AttemptResult.STOPPED_BY_USER -> "멈췄어요"
+                            AttemptResult.FAILED -> "${dev.key.label}을 못 고쳤어요. 아들한테 알릴게요"
+                            AttemptResult.DEFERRED, AttemptResult.ALREADY_OK -> null
+                        }
+                        if (speech != null) announcer.speak(speech)
                     }
                     is Decision.Skip -> {
                         if (d.pause) history.pause(dev.key)
@@ -159,6 +181,10 @@ class CheckRunner(
             if (!stopped && cmp.deviations.isEmpty() && cmp.unreadable.isEmpty()) {
                 store.appendLog("점검: 모두 정상", LogKind.INFO, ParentText.NO_PROBLEM)
             }
+            // 화면을 켜고 부모님이 직접 시작한 점검에서만 앱으로 돌아온다 (자동 점검은 꺼진 화면에서 앱을 앞으로 가져오면 안 된다)
+            if (trigger == Trigger.MANUAL || trigger == Trigger.SYMPTOM) runCatching { returner.returnToAppWithReport() }.getOrNull()?.let { r ->
+                runCatching { store.appendLog(r.logLine()) }
+            }
             return CheckOutcome.Done(summary)
         } finally {
             status.idle()
@@ -179,9 +205,6 @@ class CheckRunner(
 
     companion object {
         /** 복원 수단이 접근성(빠른 설정·설정 화면)인 항목. 방해금지는 일반 API가 먼저지만 폴백이 접근성이라 같이 묶는다. */
-        val NEEDS_ACCESSIBILITY = setOf(
-            SettingKey.AIRPLANE_MODE, SettingKey.WIFI, SettingKey.MOBILE_DATA, SettingKey.DND,
-            SettingKey.NOTIF_PHONE_APP, SettingKey.NOTIF_SMS_APP,
-        )
+        val NEEDS_ACCESSIBILITY = RestorePlan.NEEDS_ACCESSIBILITY
     }
 }

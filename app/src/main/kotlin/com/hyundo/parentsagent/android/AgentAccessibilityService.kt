@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.PixelFormat
 import android.net.ConnectivityManager
 import android.net.Network
@@ -15,9 +16,13 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.hyundo.parentsagent.core.AppReturn
+import com.hyundo.parentsagent.core.ReturnReport
+import com.hyundo.parentsagent.core.WindowSnap
 import com.hyundo.parentsagent.core.SwitchAttempt
 import com.hyundo.parentsagent.core.SwitchFinder
 import com.hyundo.parentsagent.core.UiNode
@@ -251,6 +256,40 @@ class AgentAccessibilityService : AccessibilityService() {
     private fun findMasterSwitch(): AccessibilityNodeInfo? =
         findSwitch(listOf("알림 허용", "알림 표시", "Allow notifications", "Show notifications"))
 
+    // ---- 점검 뒤 앱으로 복귀 ----
+
+    /**
+     * 각 도우미의 뒤로 가기 한 번이 모자랐을 때를 위한 안전망. 우리가 연 시스템 화면이면 뒤로 가기를 눌러 앱으로 돌아오고,
+     * 이미 앱이거나 다른 앱이면 건드리지 않는다. 백그라운드 스레드에서 부른다 (대기 포함, 최대 5회).
+     */
+    fun returnToApp(): ReturnReport = AppReturn.run(
+        appPackage = packageName,
+        readWindows = { readWindowsTopFirst() },
+        pressBack = { performGlobalAction(GLOBAL_ACTION_BACK) },
+        sleep = { Thread.sleep(it) },
+    )
+
+    /**
+     * 화면에 쌓인 창을 맨 위부터. 활성 창은 빠른 설정 패널이 아닐 수 있어서 (findTile과 같은 이유) 창 목록을 본다.
+     * 창 목록을 못 얻으면 활성 창 하나로 대신한다.
+     */
+    private fun readWindowsTopFirst(): List<WindowSnap> {
+        val screenH = resources.displayMetrics.heightPixels.coerceAtLeast(1)
+        val snaps = runCatching {
+            windows.sortedByDescending { it.layer }.map { w ->
+                val r = Rect().also { w.getBoundsInScreen(it) }
+                WindowSnap(
+                    pkg = w.root?.packageName?.toString(),
+                    heightPercent = (r.height() * 100 / screenH),
+                    ignorable = w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+                        w.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY,
+                )
+            }
+        }.getOrDefault(emptyList())
+        if (snaps.isNotEmpty()) return snaps
+        return listOfNotNull(rootInActiveWindow?.packageName?.toString()?.let { WindowSnap(it) })
+    }
+
     // ---- 공통 ----
 
     private fun clickableAncestor(n: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
@@ -281,4 +320,11 @@ class AgentAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile var instance: AgentAccessibilityService? = null
     }
+}
+
+/** 접근성 서비스가 꺼져 있으면 돌아올 수단이 없으므로 아무것도 안 한다. */
+object AccessibilityAppReturner : AppReturner {
+    override fun returnToApp() { returnToAppWithReport() }
+
+    override fun returnToAppWithReport(): ReturnReport? = AgentAccessibilityService.instance?.returnToApp()
 }

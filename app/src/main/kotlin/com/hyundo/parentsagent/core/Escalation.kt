@@ -4,6 +4,18 @@ enum class AttemptResult(val text: String) {
     SUCCESS("성공"),
     FAILED("실패"),
     STOPPED_BY_USER("부모님이 중단"),
+
+    /** 화면 꺼짐 등으로 못 해서 잠금 해제 때로 미룸. 시도·이탈 일수에 세지 않는다. */
+    DEFERRED("미룸"),
+
+    /** 복원 직전에 다시 읽으니 이미 정상이라 건드리지 않음. */
+    ALREADY_OK("이미 정상");
+
+    /** 하루 복원 횟수에 세는지. 미룬 것과 이미 정상인 것은 세지 않는다. */
+    fun countsTowardDailyLimit(): Boolean = this != DEFERRED && this != ALREADY_OK
+
+    /** 이탈 일수(연속 이탈 계산)에 세는지. */
+    fun countsAsDeviationDay(): Boolean = this != DEFERRED && this != ALREADY_OK
 }
 
 data class RestoreAttempt(

@@ -8,6 +8,7 @@ import android.provider.Settings
 import com.hyundo.parentsagent.core.AttemptResult
 import com.hyundo.parentsagent.core.Deviation
 import com.hyundo.parentsagent.core.RestoreAttempt
+import com.hyundo.parentsagent.core.RestorePlan
 import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.SettingValue
 import com.hyundo.parentsagent.core.Settle
@@ -18,10 +19,10 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
     private val audio = ctx.getSystemService(AudioManager::class.java)
     private val nm = ctx.getSystemService(NotificationManager::class.java)
 
-    override fun restore(dev: Deviation): RestoreAttempt {
+    override fun restore(dev: Deviation, apiOnly: Boolean): RestoreAttempt {
         val before = dev.actual
         val (method, attempted) = try {
-            apply(dev)
+            apply(dev, apiOnly)
         } catch (e: SecurityException) {
             "권한 없음" to false
         } catch (e: Exception) {
@@ -34,22 +35,23 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
             reader.read(dev.key, deep)
         }
         val result = when {
+            apiOnly && dev.key == SettingKey.DND && !attempted && !dev.expected.matches(after) -> AttemptResult.DEFERRED
             StopController.requested && !dev.expected.matches(after) -> AttemptResult.STOPPED_BY_USER
             dev.expected.matches(after) -> AttemptResult.SUCCESS
             else -> AttemptResult.FAILED
         }
-        return RestoreAttempt(dev.key, if (attempted) method else "$method (실행 못 함)", before, after, result)
+        val shown = if (attempted || result == AttemptResult.DEFERRED) method else "$method (실행 못 함)"
+        return RestoreAttempt(dev.key, shown, before, after, result)
     }
 
     /** @return (수단 설명, 실행 시도 여부) */
-    private fun apply(dev: Deviation): Pair<String, Boolean> {
+    private fun apply(dev: Deviation, apiOnly: Boolean): Pair<String, Boolean> {
         val service = AgentAccessibilityService.instance
         val flag = (dev.expected as? SettingValue.Flag)?.on
         return when (dev.key) {
             SettingKey.RINGER_MODE -> {
-                // 실기 확인 필요: 방해금지 중에는 알림 정책 접근 없이 링어 모드를 못 바꿀 수 있음
-                audio.ringerMode = ringerModeFor((dev.expected as SettingValue.Mode).name)
-                "일반 API (벨소리 모드)" to true
+                // 알림 정책 접근이 없으면 SecurityException: 실패 사유로 돌려주고 점검은 계속한다
+                RestorePlan.applyRinger { audio.ringerMode = ringerModeFor((dev.expected as SettingValue.Mode).name) }
             }
             SettingKey.VOLUME_RING -> {
                 audio.setStreamVolume(AudioManager.STREAM_RING, (dev.expected as SettingValue.Level).value, 0)
@@ -59,7 +61,7 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC, (dev.expected as SettingValue.Level).value, 0)
                 "일반 API (볼륨)" to true
             }
-            SettingKey.DND -> restoreDnd(service)
+            SettingKey.DND -> restoreDnd(service, apiOnly)
             SettingKey.AIRPLANE_MODE -> tile(service, Tile.AIRPLANE, SettingKey.AIRPLANE_MODE, flag)
             SettingKey.WIFI -> tile(service, Tile.WIFI, SettingKey.WIFI, flag)
             SettingKey.MOBILE_DATA -> tile(service, Tile.MOBILE_DATA, SettingKey.MOBILE_DATA, flag)
@@ -88,12 +90,20 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
         }
     }
 
-    private fun restoreDnd(service: AgentAccessibilityService?): Pair<String, Boolean> {
+    /**
+     * @param apiOnly 화면을 못 쓰는 상황. 일반 API로 안 되거나 권한이 없으면 접근성으로 가지 않고
+     * (SCREEN_OFF, false)를 돌려준다. restore()가 이걸 DEFERRED로 바꾼다.
+     */
+    private fun restoreDnd(service: AgentAccessibilityService?, apiOnly: Boolean): Pair<String, Boolean> {
+        val granted = nm.isNotificationPolicyAccessGranted
+        val path = RestorePlan.dndPath(granted, if (apiOnly) RestorePlan.SCREEN_OFF else null)
+        if (path == RestorePlan.DndPath.DeferAll) return RestorePlan.SCREEN_OFF to false
         // 일반 API 먼저: Android 15+ targetSdk 35+ 앱은 사용자가 직접 켠 방해금지를 못 끌 수 있다 → 실기 확인 필요
-        if (nm.isNotificationPolicyAccessGranted) {
+        if (granted) {
             nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
             if (reader.read(SettingKey.DND, false) == SettingValue.Flag(false)) return "일반 API (방해금지)" to true
         }
+        if (path == RestorePlan.DndPath.Api) return RestorePlan.SCREEN_OFF to false
         return tile(service, Tile.DND, SettingKey.DND, false)
     }
 

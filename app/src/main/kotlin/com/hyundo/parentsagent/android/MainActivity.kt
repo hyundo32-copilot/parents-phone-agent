@@ -1,6 +1,9 @@
 package com.hyundo.parentsagent.android
 
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -247,6 +250,7 @@ class MainActivity : android.app.Activity() {
         val logBody = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL }
         val rows = LogPresentation.adminRows(store.log(), 20)
         if (rows.isEmpty()) logBody.addView(Ui.text(c, "아직 기록이 없어요."))
+        else logBody.addView(Ui.manageButton(c, "복사") { copyAdminLog() })
         rows.forEach { logBody.addView(Ui.text(c, "${fmt(it.timeMillis)}  ${LogPresentation.formatCount(it.text, it.count)}", 18f)) }
         body.addView(
             Ui.collapsible(c, "▸ 전체 기록 (최근 20건)", "▾ 전체 기록 (최근 20건)", logOpen, longPressToOpen = false, onToggle = { logOpen = it }, body = logBody),
@@ -369,6 +373,13 @@ class MainActivity : android.app.Activity() {
         getSystemService(AccessibilityManager::class.java)
             .getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             .any { it.resolveInfo.serviceInfo.packageName == packageName }
+
+    private fun copyAdminLog() {
+        val text = LogPresentation.adminCopyText(store.log(), 20)
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("전체 기록", text))
+        toast("복사했어요")
+    }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
     private fun fmt(ms: Long) = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(Date(ms))
