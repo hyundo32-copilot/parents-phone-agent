@@ -37,12 +37,19 @@ class CheckRunnerTest {
         var stopAfterRestore = false
         /** 화면이 꺼진 상태(apiOnly)에서 방해금지 일반 API가 먹히는지. 기본은 안 됨(알림 정책 접근 없음). */
         var dndApiWorks = false
+        /** 화면이 꺼진 상태(apiOnly)에서 오디오 일반 API가 먹히는지. 기본은 먹힘. */
+        var audioApiWorks = true
+        var millis = 5_000L
+        var deferredSinceStore: Map<SettingKey, Long> = emptyMap()
 
         val hist = RestoreHistory()
         val logs = mutableListOf<String>()
         val sent = mutableListOf<String>()
         var sendOutcome = SendOutcome.SENT
         override var lastCheckMillis = 0L
+        override var deferredSince: Map<SettingKey, Long>
+            get() = deferredSinceStore
+            set(v) { deferredSinceStore = v }
         override val consented = true
         var stopped = false
 
@@ -53,6 +60,10 @@ class CheckRunnerTest {
             if (apiOnly && dev.key == SettingKey.DND && !dndApiWorks) {
                 events += "api-defer:${dev.key}"
                 return RestoreAttempt(dev.key, "화면 꺼짐", dev.actual, dev.actual, AttemptResult.DEFERRED)
+            }
+            if (apiOnly && dev.key in RestorePlan.API_FIRST_AUDIO && !audioApiWorks) {
+                events += "api-defer:${dev.key}"
+                return RestoreAttempt(dev.key, "일반 API (벨소리 모드)", dev.actual, dev.actual, AttemptResult.DEFERRED)
             }
             events += "restore:${dev.key}"
             val before = current[dev.key]!!
@@ -77,7 +88,7 @@ class CheckRunnerTest {
         override fun reset() { stopped = false }
         override fun sleep(ms: Long) {}
 
-        fun runner() = CheckRunner(this, this, this, { this }, this, this, this, this, this, { now }, { 5_000L })
+        fun runner() = CheckRunner(this, this, this, { this }, this, this, this, this, this, { now }, { millis })
         fun restored() = events.filter { it.startsWith("restore:") }.map { it.removePrefix("restore:") }
     }
 
@@ -203,7 +214,7 @@ class CheckRunnerTest {
         f.current[SettingKey.WIFI] = flag(false)
         f.failKeys = setOf(SettingKey.WIFI)
         f.runner().run(Trigger.SCHEDULED)
-        assertTrue(f.logs.any { it.contains("(실패)") && it.endsWith(" — 가짜") })
+        assertTrue(f.logs.any { it.contains("(실패)") && it.endsWith(" — 가짜 [화면 켜짐]") })
     }
 
     @Test fun `부모님이 중단하면 에스컬레이션하지 않고 남은 항목을 더 고치지 않는다`() {
@@ -291,7 +302,7 @@ class CheckRunnerTest {
         val outcome = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
         assertTrue(f.restored().isEmpty())
         assertEquals(listOf("api-defer:DND"), f.events.filter { it.startsWith("api-defer") })
-        assertEquals(1, f.logs.count { it == "방해금지: 화면 꺼짐이라 잠금 해제 때 고칠게요" })
+        assertEquals(1, f.logs.count { it == "방해금지: 화면 꺼짐이라 일반 API로 안 돼서 잠금 해제 때 고칠게요" })
         val today = now.toLocalDate()
         assertEquals(0, f.hist.restoreCount(SettingKey.DND, today))
         assertEquals(0, f.hist.consecutiveDeviationDays(SettingKey.DND, today))
@@ -332,6 +343,109 @@ class CheckRunnerTest {
         assertEquals(listOf("RINGER_MODE", "VOLUME_RING"), f.restored())
         assertEquals(SettingValue.Level.current(5), f.current[SettingKey.VOLUME_RING])
         assertEquals(1, f.sent.size)
+    }
+
+    // --- 오디오 API_FIRST + 장기 미룸 ---
+
+    private fun silentRinger(f: Fake) {
+        f.blocker = "화면 꺼짐"
+        f.audioApiWorks = false
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("SILENT")
+    }
+
+    @Test fun `화면 꺼짐에서 벨소리 복원이 DEFERRED면 알리지 않고 횟수·점검 시각에 안 센다`() {
+        val f = Fake()
+        silentRinger(f)
+        val outcome = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
+        assertEquals(listOf("api-defer:RINGER_MODE"), f.events.filter { it.startsWith("api-defer") })
+        assertTrue(f.restored().isEmpty())
+        assertTrue(f.sent.isEmpty())
+        assertEquals(0, f.hist.restoreCount(SettingKey.RINGER_MODE, now.toLocalDate()))
+        assertEquals(0, f.hist.consecutiveDeviationDays(SettingKey.RINGER_MODE, now.toLocalDate()))
+        assertEquals(0L, f.lastCheckMillis)
+        assertEquals("폰을 쓰는 중이라 ${SettingKey.RINGER_MODE.label}은 잠금을 풀면 고칠게요", outcome.summary)
+        assertTrue(f.logs.contains("${SettingKey.RINGER_MODE.label}: 화면 꺼짐이라 일반 API로 안 돼서 잠금 해제 때 고칠게요"))
+    }
+
+    @Test fun `점검이 시작한 시각이 로그에 남는다`() {
+        val f = Fake()
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.logs.any { it.startsWith("예약 점검 시작: 12:00") })
+    }
+
+    @Test fun `처음 미룰 때 deferredSince를 기록하고 24시간 전에는 알리지 않는다`() {
+        val f = Fake()
+        silentRinger(f)
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(mapOf(SettingKey.RINGER_MODE to 5_000L), f.deferredSinceStore)
+        f.millis = 5_000L + 23 * 3_600_000L
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.sent.isEmpty())
+        assertEquals(mapOf(SettingKey.RINGER_MODE to 5_000L), f.deferredSinceStore) // 처음 시각 유지
+    }
+
+    @Test fun `24시간 넘게 미뤄지면 에스컬레이션 1회, 같은 날 다시 점검해도 안 보낸다`() {
+        val f = Fake()
+        silentRinger(f)
+        f.runner().run(Trigger.SCHEDULED)
+        f.millis = 5_000L + 24 * 3_600_000L
+        val outcome = f.runner().run(Trigger.SCHEDULED) as CheckOutcome.Done
+        assertEquals(1, f.sent.size)
+        assertTrue(f.sent[0].contains(SkipReason.DEFERRED_TOO_LONG.text))
+        assertTrue(outcome.summary.startsWith("현도에게 알렸어요"))
+        assertEquals(0, f.hist.restoreCount(SettingKey.RINGER_MODE, now.toLocalDate()))
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(1, f.sent.size)
+    }
+
+    @Test fun `접근성 항목을 gate로 미룬 경우도 24시간이 지나면 알린다`() {
+        val f = Fake()
+        f.blocker = "화면 꺼짐"
+        f.current[SettingKey.WIFI] = flag(false)
+        f.runner().run(Trigger.SCHEDULED)
+        f.millis = 5_000L + 25 * 3_600_000L
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(1, f.sent.size)
+        assertTrue(f.sent[0].contains(SkipReason.DEFERRED_TOO_LONG.text))
+    }
+
+    @Test fun `미뤘던 항목이 이후 고쳐지면 deferredSince를 지운다`() {
+        val f = Fake()
+        silentRinger(f)
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.deferredSinceStore.containsKey(SettingKey.RINGER_MODE))
+        f.blocker = null
+        f.runner().run(Trigger.UNLOCK)
+        assertEquals(listOf("RINGER_MODE"), f.restored())
+        assertTrue(f.deferredSinceStore.isEmpty())
+    }
+
+    @Test fun `미뤘던 항목이 저절로 정상이 돼도 deferredSince를 지운다`() {
+        val f = Fake()
+        silentRinger(f)
+        f.runner().run(Trigger.SCHEDULED)
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("NORMAL")
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.deferredSinceStore.isEmpty())
+    }
+
+    @Test fun `화면이 켜진 상태의 복원 실패는 에스컬레이션하고 메시지에 화면 켜짐 사유가 들어간다`() {
+        val f = Fake()
+        f.current[SettingKey.RINGER_MODE] = SettingValue.Mode("SILENT")
+        f.failKeys = setOf(SettingKey.RINGER_MODE)
+        f.runner().run(Trigger.SCHEDULED)
+        assertEquals(1, f.sent.size)
+        assertTrue(f.sent[0].contains("[화면 켜짐]"))
+        assertEquals(1, f.hist.restoreCount(SettingKey.RINGER_MODE, now.toLocalDate()))
+    }
+
+    @Test fun `화면이 켜진 상태에서 막힌 사유(통화 중 등)가 있으면 그 사유를 붙인다`() {
+        val f = Fake()
+        f.blocker = "통화 중"
+        f.current[SettingKey.VOLUME_RING] = SettingValue.Level.current(0)
+        f.failKeys = setOf(SettingKey.VOLUME_RING)
+        f.runner().run(Trigger.SCHEDULED)
+        assertTrue(f.sent[0].contains("[통화 중]"))
     }
 
     // --- Done.detail (부모님 화면 문장의 재료) ---

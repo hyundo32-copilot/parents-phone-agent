@@ -2,6 +2,7 @@ package com.hyundo.parentsagent.net
 
 import com.hyundo.parentsagent.core.HeartbeatMessage
 import com.hyundo.parentsagent.core.HeartbeatSchedule
+import com.hyundo.parentsagent.core.StepsDelta
 import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -21,19 +22,32 @@ class HeartbeatSender(
     private val loadLastSlotDate: () -> LocalDate?,
     private val saveLastSlotDate: (LocalDate) -> Unit,
     private val isHealthy: () -> Boolean = { true },
+    /** 만보기 누적값. 권한·센서가 없거나 타임아웃이면 null (알 수 없음). 호출하는 스레드에서 기다리므로 백그라운드에서만 부른다. */
+    private val readStepCount: () -> Long? = { null },
+    private val loadLastStepCount: () -> Long? = { null },
+    private val saveStepCount: (Long) -> Unit = {},
 ) {
     @Synchronized
     fun trySend(now: LocalDateTime): HeartbeatOutcome {
         if (!isHealthy()) return HeartbeatOutcome.UNHEALTHY
         val slot = HeartbeatSchedule.dueSlot(now, hour, loadLastSlotDate()) ?: return HeartbeatOutcome.NOT_DUE
         if (!telegram.configured) return HeartbeatOutcome.DEFERRED
-        val text = HeartbeatMessage.build(slot, now)
+        val currentSteps = readStepCount()
+        val text = HeartbeatMessage.build(slot, now, StepsDelta.compute(loadLastStepCount(), currentSteps))
         try {
             telegram.send(text)
         } catch (e: IOException) {
             return HeartbeatOutcome.DEFERRED
         }
         saveLastSlotDate(slot.toLocalDate())
+        if (currentSteps != null) saveStepCount(currentSteps)
         return if (HeartbeatMessage.isDelayed(slot, now)) HeartbeatOutcome.SENT_DELAYED else HeartbeatOutcome.SENT
+    }
+
+    /** 지금 보낼 메시지 전문만 만든다. 전송도 저장도 하지 않는다 (디버그 미리보기용). */
+    fun previewText(now: LocalDateTime): String {
+        var slot = now.toLocalDate().atTime(hour, 0)
+        if (slot.isAfter(now)) slot = slot.minusDays(1)
+        return HeartbeatMessage.build(slot, now, StepsDelta.compute(loadLastStepCount(), readStepCount()))
     }
 }

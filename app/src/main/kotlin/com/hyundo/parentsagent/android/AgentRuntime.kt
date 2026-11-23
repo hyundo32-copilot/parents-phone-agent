@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.view.accessibility.AccessibilityManager
 import com.hyundo.parentsagent.core.Symptom
+import com.hyundo.parentsagent.core.UnlockCheckPolicy
 import com.hyundo.parentsagent.net.EscalationSender
 import com.hyundo.parentsagent.net.HeartbeatSender
 import com.hyundo.parentsagent.net.LinerClient
@@ -42,6 +43,9 @@ object AgentRuntime {
             telegram, Scheduler.HEARTBEAT_HOUR,
             { store.lastHeartbeatSlotDate }, { store.lastHeartbeatSlotDate = it },
             isHealthy = { isAccessibilityEnabled(app) },
+            readStepCount = { StepCounterReader.read(app) },
+            loadLastStepCount = { store.lastStepCount },
+            saveStepCount = { store.saveStepCount(it) },
         )
         runner = CheckRunner(
             store, reader, AndroidScreenGate(app), { deep -> Restorer(app, reader, deep) },
@@ -83,12 +87,22 @@ object AgentRuntime {
         async { heartbeat.trySend(LocalDateTime.now()) }
     }
 
-    /** 잠금 해제 후 첫 점검. 6시간 안에 점검했으면 건너뛴다 (배터리 부담을 줄이기 위한 가벼운 기준). */
+    /** 잠금 해제 후 첫 점검. 미룬 항목이 없고 6시간 안에 점검했으면 건너뛴다 (배터리 부담을 줄이기 위한 가벼운 기준). */
     fun onUnlock(context: Context) {
         init(context)
         sendHeartbeatAsync(context) // 지연된 안부 신호가 있으면 이때 따라잡는다
-        if (System.currentTimeMillis() - store.lastCheckMillis < UNLOCK_CHECK_MIN_GAP_MS) return
-        runCheckAsync(context, Trigger.UNLOCK)
+        flushOutboxAsync(context) // Doze 중에 대기열에 남은 알림도 이때 비운다
+        val now = System.currentTimeMillis()
+        val last = store.lastCheckMillis
+        val deferredCount = store.deferredSince.size
+        val run = UnlockCheckPolicy.shouldRun(last, now, deferredCount > 0, UNLOCK_CHECK_MIN_GAP_MS)
+        store.appendLog(UnlockCheckPolicy.logLine(last, now, deferredCount, run))
+        if (!run) return
+        // 결과가 Done이 아니면(기준 없음·동의 없음·다른 점검 진행 중) 조용히 끝나서, 실기에서 구분하려고 남긴다
+        runCheckAsync(context, Trigger.UNLOCK) { outcome ->
+            val text = (outcome as? CheckOutcome.Done)?.summary ?: outcome.toString()
+            store.appendLog("잠금 해제 점검 끝: $text")
+        }
     }
 
     private const val UNLOCK_CHECK_MIN_GAP_MS = 6 * 60 * 60 * 1000L

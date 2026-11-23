@@ -50,6 +50,8 @@ class AgentAccessibilityService : AccessibilityService() {
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             // ACTION_USER_PRESENT 는 매니페스트로 못 받으므로 상주 프로세스인 이 서비스에서 받는다 (설계 §4)
+            // 다른 액션이 섞여 들어와도 잠금 해제로 치지 않는다 (EXPORTED 리시버라 방어적으로 확인)
+            if (intent.action != Intent.ACTION_USER_PRESENT) return
             AgentRuntime.onUnlock(applicationContext)
         }
     }
@@ -57,7 +59,16 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         AgentRuntime.init(applicationContext)
-        registerReceiver(unlockReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), Context.RECEIVER_NOT_EXPORTED)
+        // RECEIVER_NOT_EXPORTED 로 등록하면 안 된다. ACTION_USER_PRESENT 는 system_server(uid 1000)가 아니라
+        // SystemUI(일반 앱 uid)의 KeyguardViewMediator가 보내서, 내보내지 않은 리시버에는 "Exported Denial"로 전달되지 않는다.
+        // USER_PRESENT 는 보호된 브로드캐스트라 다른 앱이 위조해 보낼 수 없으므로 EXPORTED 로 열어도 안전하다.
+        val registered = runCatching {
+            registerReceiver(unlockReceiver, IntentFilter(Intent.ACTION_USER_PRESENT), Context.RECEIVER_EXPORTED)
+        }
+        AgentRuntime.store.appendLog(
+            if (registered.isSuccess) "접근성 서비스 연결: 잠금 해제 감지 등록함"
+            else "접근성 서비스 연결: 잠금 해제 감지 등록 실패 (${registered.exceptionOrNull()?.javaClass?.simpleName})",
+        )
         StatusBus.addListener(statusListener)
         registerNetworkCallback()
         Scheduler.scheduleAll(applicationContext)
@@ -77,6 +88,8 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     private fun teardown() {
+        // onUnbind 와 onDestroy 가 둘 다 불리므로 연결된 인스턴스일 때 한 번만 남긴다
+        if (instance === this) runCatching { AgentRuntime.store.appendLog("접근성 서비스 연결 끊김: 잠금 해제 감지 해제") }
         if (instance === this) instance = null
         runCatching { unregisterReceiver(unlockReceiver) }
         StatusBus.removeListener(statusListener)
@@ -89,6 +102,11 @@ class AgentAccessibilityService : AccessibilityService() {
     private fun registerNetworkCallback() {
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = AgentRuntime.flushOutboxAsync(applicationContext)
+
+            // Doze로 막혔던 앱 네트워크가 풀릴 때는 onAvailable이 아니라 이게 불린다 (API 29+)
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                if (!blocked) AgentRuntime.flushOutboxAsync(applicationContext)
+            }
         }
         networkCallback = cb
         runCatching { getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(cb) }

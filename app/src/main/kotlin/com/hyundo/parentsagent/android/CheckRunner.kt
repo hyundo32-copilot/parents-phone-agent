@@ -42,6 +42,8 @@ class CheckRunner(
         if (!running.compareAndSet(false, true)) return CheckOutcome.AlreadyRunning
         try {
             stop.reset()
+            // 알람 지연과 점검 지연을 구분하려고 점검이 실제로 시작한 시각을 남긴다
+            if (trigger == Trigger.SCHEDULED) store.appendLog("예약 점검 시작: ${clock().toLocalTime().withNano(0)}")
             // 다른 앱 알림 설정은 접근성으로 화면을 열어 읽어야 해서, 부모님이 쓰는 중일 수 있는 자동 점검에서는 건너뛴다
             val deep = trigger == Trigger.MANUAL || trigger == Trigger.SYMPTOM
             val history = store.history()
@@ -53,9 +55,21 @@ class CheckRunner(
             val pendingFailed = mutableListOf<PendingFailure>()
             val skipped = mutableListOf<SkippedItem>()
             val deferred = mutableListOf<SettingKey>()
+            // 이번 점검에서 gate/API 때문에 미룬 항목 (잠금 해제를 기다리는 중). 이 항목만 deferredSince를 유지한다.
+            val deferredSince = store.deferredSince
+            val stillDeferred = mutableMapOf<SettingKey, Long>()
             val decidedKeys = mutableSetOf<SettingKey>()
             val restorer = restorerFor(deep)
             var airplaneRestored = false
+
+            // 하루 넘게 미뤄졌으면 하루 한 번만 현도에게 알린다 (잠금 해제가 없었다는 것 자체가 안부 신호다)
+            fun noteDeferred(dev: Deviation, today: java.time.LocalDate) {
+                val since = deferredSince[dev.key] ?: nowMillis()
+                stillDeferred[dev.key] = since
+                if (nowMillis() - since >= DEFERRED_TOO_LONG_MS && history.markNotified(dev.key, today, SkipReason.DEFERRED_TOO_LONG.name)) {
+                    skipped += SkippedItem(dev, SkipReason.DEFERRED_TOO_LONG)
+                }
+            }
 
             // 방해금지를 벨소리 모드·볼륨보다 먼저 푼다 (우선순위 방해금지가 켜져 있으면 벨소리 모드가 SILENT로 남는다)
             for (dev in RestorePlan.orderForRestore(cmp.deviations)) {
@@ -64,11 +78,13 @@ class CheckRunner(
 
                 // 화면이 꺼졌거나 잠겼거나 통화 중이면 접근성 수단이 필요한 항목은 잠금 해제 때로 미룬다.
                 // 판정(policy)에 넣지 않으므로 시도 횟수·이탈 일수에 안 세고 현도에게도 알리지 않는다.
-                // 방해금지만 일반 API를 먼저 시도한다 (API_FIRST): 안 되면 Restorer가 미룸으로 돌려준다.
-                val gateMode = RestorePlan.gateMode(dev.key, gate.accessibilityBlocker())
+                // 방해금지와 오디오 항목(벨소리 모드·볼륨)은 일반 API를 먼저 시도한다 (API_FIRST): 안 되면 Restorer가 미룸으로 돌려준다.
+                val blocker = gate.accessibilityBlocker()
+                val gateMode = RestorePlan.gateMode(dev.key, blocker)
                 if (gateMode == GateMode.DEFER) {
                     deferred += dev.key
                     decidedKeys += dev.key
+                    noteDeferred(dev, now.toLocalDate())
                     store.appendLog(RestorePlan.deferredLogLine(dev.key.label))
                     continue
                 }
@@ -103,11 +119,14 @@ class CheckRunner(
                             store.appendLog("${dev.key.label}: 부모님이 중단해서 고치지 않았어요")
                             break
                         }
-                        val a = restorer.restore(dev, apiOnly = gateMode == GateMode.API_FIRST)
+                        val restored = restorer.restore(dev, apiOnly = gateMode == GateMode.API_FIRST)
+                        // 실패하면 화면 상태가 사유일 수 있어서 남긴다 (텔레그램·로그로 원인을 가릴 수 있게)
+                        val a = if (restored.result == AttemptResult.FAILED) restored.copy(method = "${restored.method} [${blocker ?: "화면 켜짐"}]") else restored
                         if (a.result == AttemptResult.DEFERRED) {
                             // 일반 API로 못 했고 화면이 꺼져 있다: 시도·이탈 일수에 세지 않고 잠금 해제 때 다시 한다
                             if (!hadDeviationToday) history.forgetDeviation(dev.key, now.toLocalDate())
                             deferred += dev.key
+                            noteDeferred(dev, now.toLocalDate())
                             store.appendLog(RestorePlan.deferredLogLine(dev.key.label))
                             continue
                         }
@@ -141,6 +160,8 @@ class CheckRunner(
             }
             status.idle()
             store.saveHistory(history)
+            // 중단한 점검은 못 본 항목이 있어서 이전 기록을 그대로 둔다
+            if (!stop.requested) store.deferredSince = stillDeferred
             // 미룬 항목이 있으면 점검한 것으로 치지 않는다. 그래야 잠금 해제 때 6시간 간격에 막히지 않고 따라잡는다.
             if (deferred.isEmpty()) store.lastCheckMillis = nowMillis()
 
@@ -216,6 +237,8 @@ class CheckRunner(
     }
 
     companion object {
+        private const val DEFERRED_TOO_LONG_MS = 24 * 60 * 60 * 1000L
+
         /** 복원 수단이 접근성(빠른 설정·설정 화면)인 항목. 방해금지는 일반 API가 먼저지만 폴백이 접근성이라 같이 묶는다. */
         val NEEDS_ACCESSIBILITY = RestorePlan.NEEDS_ACCESSIBILITY
     }

@@ -19,6 +19,9 @@ object RestorePlan {
         SettingKey.NOTIF_PHONE_APP, SettingKey.NOTIF_SMS_APP,
     )
 
+    /** 일반 API(AudioManager)로 복원하는 오디오 항목. 화면 꺼짐에서도 한 번 시도하고, 안 되면 미룬다. */
+    val API_FIRST_AUDIO: Set<SettingKey> = setOf(SettingKey.RINGER_MODE, SettingKey.VOLUME_RING, SettingKey.VOLUME_MEDIA)
+
     const val RINGER_NO_POLICY = "알림 정책 접근 없음"
     const val SCREEN_OFF = "화면 꺼짐"
 
@@ -55,12 +58,19 @@ object RestorePlan {
 
     fun gateMode(key: SettingKey, blocker: String?): GateMode = when {
         blocker == null -> GateMode.NONE
-        key == SettingKey.DND -> GateMode.API_FIRST
+        key == SettingKey.DND || key in API_FIRST_AUDIO -> GateMode.API_FIRST
         key in NEEDS_ACCESSIBILITY -> GateMode.DEFER
         else -> GateMode.NONE
     }
 
-    fun deferredLogLine(label: String): String = "$label: 화면 꺼짐이라 잠금 해제 때 고칠게요"
+    fun deferredLogLine(label: String): String = "$label: 화면 꺼짐이라 일반 API로 안 돼서 잠금 해제 때 고칠게요"
+
+    /**
+     * API_FIRST로 시도한 결과를 미룸(DEFERRED)으로 바꿀지.
+     * 방해금지는 실행하지 못했을 때(권한 없음 등), 오디오 항목은 시도했더라도 값이 안 맞으면 미룬다.
+     */
+    fun deferredAfterApi(key: SettingKey, apiOnly: Boolean, attempted: Boolean, matched: Boolean): Boolean =
+        apiOnly && !matched && ((key == SettingKey.DND && !attempted) || key in API_FIRST_AUDIO)
 
     fun alreadyOkLogLine(label: String): String = "$label: 다른 항목을 고치는 사이 이미 원래대로 돌아와서 건드리지 않았어요 (이미 정상)"
 

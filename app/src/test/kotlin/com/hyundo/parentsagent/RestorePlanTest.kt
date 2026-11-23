@@ -46,12 +46,52 @@ class RestorePlanTest {
 
     // --- gateMode ---
 
-    @Test fun `gateMode - 방해금지는 API 먼저, 접근성 항목은 미룸, 일반 API 항목은 그대로`() {
+    @Test fun `gateMode - 방해금지와 오디오 항목은 API 먼저, 접근성 항목은 미룸`() {
         assertEquals(GateMode.API_FIRST, RestorePlan.gateMode(SettingKey.DND, "화면 꺼짐"))
         assertEquals(GateMode.DEFER, RestorePlan.gateMode(SettingKey.WIFI, "화면 꺼짐"))
-        assertEquals(GateMode.NONE, RestorePlan.gateMode(SettingKey.RINGER_MODE, "화면 꺼짐"))
-        assertEquals(GateMode.NONE, RestorePlan.gateMode(SettingKey.VOLUME_RING, "통화 중"))
+        assertEquals(GateMode.API_FIRST, RestorePlan.gateMode(SettingKey.VOLUME_RING, "통화 중"))
         SettingKey.entries.forEach { assertEquals(it.name, GateMode.NONE, RestorePlan.gateMode(it, null)) }
+    }
+
+    @Test fun `gateMode - 오디오 3개는 화면 꺼짐이면 API 먼저, 막힌 게 없으면 NONE`() {
+        assertEquals(setOf(SettingKey.RINGER_MODE, SettingKey.VOLUME_RING, SettingKey.VOLUME_MEDIA), RestorePlan.API_FIRST_AUDIO)
+        RestorePlan.API_FIRST_AUDIO.forEach {
+            assertEquals(it.name, GateMode.API_FIRST, RestorePlan.gateMode(it, "화면 꺼짐"))
+            assertEquals(it.name, GateMode.NONE, RestorePlan.gateMode(it, null))
+        }
+    }
+
+    // --- deferredAfterApi ---
+
+    @Test fun `deferredAfterApi - 오디오는 API만 쓰는 상황에서 값이 안 맞으면 시도했어도 미룬다`() {
+        RestorePlan.API_FIRST_AUDIO.forEach {
+            assertTrue(it.name, RestorePlan.deferredAfterApi(it, apiOnly = true, attempted = true, matched = false))
+            assertTrue(it.name, RestorePlan.deferredAfterApi(it, apiOnly = true, attempted = false, matched = false))
+        }
+    }
+
+    @Test fun `deferredAfterApi - 오디오가 맞으면 미루지 않는다`() {
+        RestorePlan.API_FIRST_AUDIO.forEach {
+            assertFalse(it.name, RestorePlan.deferredAfterApi(it, apiOnly = true, attempted = true, matched = true))
+        }
+    }
+
+    @Test fun `deferredAfterApi - 화면이 켜져 있으면(apiOnly 아님) 오디오 실패는 FAILED로 둔다`() {
+        RestorePlan.API_FIRST_AUDIO.forEach {
+            assertFalse(it.name, RestorePlan.deferredAfterApi(it, apiOnly = false, attempted = true, matched = false))
+        }
+    }
+
+    @Test fun `deferredAfterApi - 방해금지는 기존대로 실행 못 했을 때만 미룬다`() {
+        assertTrue(RestorePlan.deferredAfterApi(SettingKey.DND, apiOnly = true, attempted = false, matched = false))
+        assertFalse(RestorePlan.deferredAfterApi(SettingKey.DND, apiOnly = true, attempted = true, matched = false))
+        assertFalse(RestorePlan.deferredAfterApi(SettingKey.DND, apiOnly = true, attempted = false, matched = true))
+        assertFalse(RestorePlan.deferredAfterApi(SettingKey.DND, apiOnly = false, attempted = false, matched = false))
+        assertFalse(RestorePlan.deferredAfterApi(SettingKey.WIFI, apiOnly = true, attempted = false, matched = false))
+    }
+
+    @Test fun `미룸 로그 문구에 사유가 들어간다`() {
+        assertEquals("벨소리 모드: 화면 꺼짐이라 일반 API로 안 돼서 잠금 해제 때 고칠게요", RestorePlan.deferredLogLine("벨소리 모드"))
     }
 
     @Test fun `gateMode - 접근성이 필요한 나머지 항목은 전부 미룸`() {

@@ -7,6 +7,7 @@ import com.hyundo.parentsagent.core.LogKind
 import com.hyundo.parentsagent.core.ResultNote
 import com.hyundo.parentsagent.core.ResultNotes
 import com.hyundo.parentsagent.core.RestoreHistory
+import com.hyundo.parentsagent.core.SettingKey
 import com.hyundo.parentsagent.core.Snapshot
 import com.hyundo.parentsagent.net.Outbox
 import org.json.JSONArray
@@ -28,6 +29,19 @@ class Store(context: Context) : CheckStore {
     override var lastCheckMillis: Long
         get() = p.getLong("lastCheck", 0L)
         set(v) = p.edit().putLong("lastCheck", v).apply()
+
+    override var deferredSince: Map<SettingKey, Long>
+        get() {
+            val o = runCatching { JSONObject(p.getString("deferredSince", null) ?: "{}") }.getOrNull() ?: return emptyMap()
+            return o.keys().asSequence().mapNotNull { name ->
+                SettingKey.entries.firstOrNull { it.name == name }?.let { it to o.optLong(name) }
+            }.toMap()
+        }
+        set(v) {
+            val o = JSONObject()
+            v.forEach { (k, t) -> o.put(k.name, t) }
+            p.edit().putString("deferredSince", o.toString()).apply()
+        }
 
     /** 마지막 점검 결과 시각. 0이면 알 수 없음 (이 필드가 생기기 전 저장본 포함). */
     val lastResultMillis: Long get() = p.getLong("lastResultAt", 0L)
@@ -53,6 +67,14 @@ class Store(context: Context) : CheckStore {
     var lastHeartbeatSlotDate: LocalDate?
         get() = p.getString("hbSlot", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         set(v) = p.edit().putString("hbSlot", v?.toString()).apply()
+
+    /** 마지막으로 안부 신호를 보낼 때 읽은 만보기 누적값. 없으면 null. */
+    val lastStepCount: Long? get() = if (p.contains("lastStepCount")) p.getLong("lastStepCount", 0L) else null
+    val lastStepCountAt: Long get() = p.getLong("lastStepCountAt", 0L)
+
+    fun saveStepCount(count: Long, atMillis: Long = System.currentTimeMillis()) {
+        p.edit().putLong("lastStepCount", count).putLong("lastStepCountAt", atMillis).apply()
+    }
 
     override fun snapshot(): Snapshot? = p.getString("snapshot", null)?.let { runCatching { Snapshot.fromJson(it) }.getOrNull() }
     fun saveSnapshot(s: Snapshot) = p.edit().putString("snapshot", s.toJson()).apply()

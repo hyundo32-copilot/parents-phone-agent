@@ -9,6 +9,10 @@ object Settle {
     const val DEFAULT_TIMEOUT_MS = 8_000L
     const val DEFAULT_INTERVAL_MS = 500L
 
+    /** 오디오 항목은 짧게만 기다린다. 길게 막으면 Doze의 네트워크 예외 시간이 줄어든다. */
+    const val AUDIO_TIMEOUT_MS = 1_500L
+    const val AUDIO_INTERVAL_MS = 250L
+
     /**
      * 맞으면 바로 돌려주고, 안 맞으면 [intervalMs]마다 [timeoutMs]까지 다시 읽는다.
      * [shouldStop]이 true가 되면 더 기다리지 않는다. 마지막으로 읽은 값을 돌려준다 (판정은 호출한 쪽이 한다).

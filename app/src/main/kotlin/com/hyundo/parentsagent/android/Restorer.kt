@@ -30,19 +30,31 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
         }
         // 와이파이는 스위치를 켠 뒤 전파가 올라올 때까지 isWifiEnabled 가 false라서, 바로 읽으면 고쳐졌는데도 실패로 본다.
         val after = if (attempted && dev.key in SETTLE_KEYS) {
-            Settle.await(dev.expected, { reader.read(dev.key, deep) }, Thread::sleep, { StopController.requested })
+            val audio = dev.key in RestorePlan.API_FIRST_AUDIO
+            Settle.await(
+                dev.expected, { reader.read(dev.key, deep) }, Thread::sleep, { StopController.requested },
+                timeoutMs = if (audio) Settle.AUDIO_TIMEOUT_MS else Settle.DEFAULT_TIMEOUT_MS,
+                intervalMs = if (audio) Settle.AUDIO_INTERVAL_MS else Settle.DEFAULT_INTERVAL_MS,
+            )
         } else {
             reader.read(dev.key, deep)
         }
         val result = when {
-            apiOnly && dev.key == SettingKey.DND && !attempted && !dev.expected.matches(after) -> AttemptResult.DEFERRED
+            RestorePlan.deferredAfterApi(dev.key, apiOnly, attempted, dev.expected.matches(after)) -> AttemptResult.DEFERRED
             StopController.requested && !dev.expected.matches(after) -> AttemptResult.STOPPED_BY_USER
             dev.expected.matches(after) -> AttemptResult.SUCCESS
             else -> AttemptResult.FAILED
         }
-        val shown = if (attempted || result == AttemptResult.DEFERRED) method else "$method (실행 못 함)"
+        val base = if (attempted || result == AttemptResult.DEFERRED) method else "$method (실행 못 함)"
+        // 실패 원인이 화면이 아니라 출력 기기·고정 볼륨일 수 있어서 진단용으로 남긴다
+        val shown = if (result != AttemptResult.SUCCESS && dev.key in RestorePlan.API_FIRST_AUDIO) "$base ${audioDiagnostics()}" else base
         return RestoreAttempt(dev.key, shown, before, after, result)
     }
+
+    private fun audioDiagnostics(): String = runCatching {
+        val outputs = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).joinToString(",") { "${it.type}:${it.productName}" }
+        "[출력 기기: $outputs, 볼륨 고정: ${audio.isVolumeFixed}]"
+    }.getOrDefault("[출력 기기 확인 실패]")
 
     /** @return (수단 설명, 실행 시도 여부) */
     private fun apply(dev: Deviation, apiOnly: Boolean): Pair<String, Boolean> {
@@ -80,7 +92,7 @@ class Restorer(context: Context, private val reader: SettingsReader, private val
 
     companion object {
         /** 값이 바뀌는 데 시간이 걸려 복원 직후 재읽기를 기다려야 하는 항목. 나머지는 설정값이 동기적으로 바뀐다. */
-        private val SETTLE_KEYS = setOf(SettingKey.WIFI)
+        private val SETTLE_KEYS = setOf(SettingKey.WIFI) + RestorePlan.API_FIRST_AUDIO
 
         /** 기준의 벨소리 모드 이름을 AudioManager 상수로. 기준이 진동이면 진동으로 되돌린다 (원칙 1: 기준이 먼저다). */
         fun ringerModeFor(name: String): Int = when (name) {

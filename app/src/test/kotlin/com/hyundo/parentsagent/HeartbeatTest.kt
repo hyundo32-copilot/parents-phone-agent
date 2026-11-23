@@ -2,6 +2,7 @@ package com.hyundo.parentsagent
 
 import com.hyundo.parentsagent.core.HeartbeatMessage
 import com.hyundo.parentsagent.core.HeartbeatSchedule
+import com.hyundo.parentsagent.core.StepsReading
 import com.hyundo.parentsagent.net.*
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -20,20 +21,121 @@ class HeartbeatTest {
 
     // --- 메시지 조립 ---
 
-    @Test fun `정상 메시지는 정상과 보낸 시각만 담는다`() {
-        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5))
-        assertEquals("[부모님 폰 안부 신호] 정상\n보낸 시각: 2026-11-13 09:05", m)
+    @Test fun `정상 메시지는 정상과 보낸 시각과 걸음수만 담는다`() {
+        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading.UNKNOWN)
+        assertEquals("[부모님 폰 안부 신호] 정상\n보낸 시각: 2026-11-13 09:05\n걸음수(24시간): 알 수 없음", m)
         assertFalse(m.contains("지연됨"))
     }
 
     @Test fun `1시간 미만 늦으면 지연 표시가 없다`() {
-        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 59))
+        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 59), StepsReading.UNKNOWN)
         assertFalse(m.contains("지연됨"))
     }
 
     @Test fun `정확히 1시간 늦으면 지연됨 표시`() {
-        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10))
-        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00", m)
+        val m = HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10), StepsReading.UNKNOWN)
+        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00\n걸음수(24시간): 알 수 없음", m)
+    }
+
+    @Test fun `걸음수 정상은 머리말 그대로에 걸음수 줄만 추가된다`() {
+        assertEquals(
+            "[부모님 폰 안부 신호] 정상\n보낸 시각: 2026-11-13 09:05\n걸음수(24시간): 1,234보",
+            HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading(1234)),
+        )
+        assertEquals(
+            "[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00\n걸음수(24시간): 1,234보",
+            HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10), StepsReading(1234)),
+        )
+    }
+
+    @Test fun `걸음수 이상은 머리말이 걸음수 적음으로 바뀐다`() {
+        assertEquals(
+            "[부모님 폰 안부 신호] 정상 — 걸음수 적음\n보낸 시각: 2026-11-13 09:05\n걸음수(24시간): 123보",
+            HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading(123)),
+        )
+        assertEquals(
+            "[부모님 폰 안부 신호] 정상 (지연됨) — 걸음수 적음\n보낸 시각: 2026-11-13 10:00\n걸음수(24시간): 0보",
+            HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10), StepsReading(0)),
+        )
+    }
+
+    @Test fun `걸음수 알 수 없음은 이상 표시 없이 머리말 그대로`() {
+        assertEquals(
+            "[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 10:00\n걸음수(24시간): 알 수 없음",
+            HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 10), StepsReading.UNKNOWN),
+        )
+    }
+
+    @Test fun `500보는 정상이고 499보는 적음`() {
+        assertFalse(HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading(500)).contains("걸음수 적음"))
+        assertTrue(HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading(499)).contains("걸음수 적음"))
+    }
+
+    @Test fun `큰 걸음수도 천 단위 구분자로 표기`() {
+        assertTrue(HeartbeatMessage.build(at(2026, 11, 13, 9), at(2026, 11, 13, 9, 5), StepsReading(1234567)).endsWith("걸음수(24시간): 1,234,567보"))
+    }
+
+    // --- 걸음수 연결 ---
+
+    private class StepMem(var last: Long?, var read: Long?) { val saves = mutableListOf<Long>() }
+
+    private fun stepSender(t: FakeTransport, mem: Mem, steps: StepMem) =
+        HeartbeatSender(
+            TelegramClient("TOKEN", "CHAT", t), hour, { mem.last }, { mem.last = it },
+            readStepCount = { steps.read }, loadLastStepCount = { steps.last },
+            saveStepCount = { steps.last = it; steps.saves += it },
+        )
+
+    @Test fun `전송 성공하면 새 만보기 값을 저장하고 델타를 메시지에 담는다`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        val steps = StepMem(last = 1000, read = 1200)
+        assertEquals(HeartbeatOutcome.SENT, stepSender(t, Mem(), steps).trySend(at(2026, 11, 13, 9, 1)))
+        assertTrue(sentText(t).contains("정상 — 걸음수 적음"))
+        assertTrue(sentText(t).endsWith("걸음수(24시간): 200보"))
+        assertEquals(listOf(1200L), steps.saves)
+    }
+
+    @Test fun `전송 실패하면 만보기 값을 저장하지 않는다`() {
+        val t = FakeTransport(mutableListOf(netDown()))
+        val steps = StepMem(last = 1000, read = 9000)
+        assertEquals(HeartbeatOutcome.DEFERRED, stepSender(t, Mem(), steps).trySend(at(2026, 11, 13, 9, 1)))
+        assertTrue(steps.saves.isEmpty())
+    }
+
+    @Test fun `읽기에 실패해도 신호는 나가고 저장된 값은 그대로다`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        val steps = StepMem(last = 1000, read = null)
+        assertEquals(HeartbeatOutcome.SENT, stepSender(t, Mem(), steps).trySend(at(2026, 11, 13, 9, 1)))
+        assertTrue(sentText(t).endsWith("걸음수(24시간): 알 수 없음"))
+        assertTrue(steps.saves.isEmpty())
+        assertEquals(1000L, steps.last)
+    }
+
+    @Test fun `재부팅으로 값이 줄면 알 수 없음으로 보내고 현재 값을 새 기준으로 저장`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        val steps = StepMem(last = 50000, read = 300)
+        stepSender(t, Mem(), steps).trySend(at(2026, 11, 13, 9, 1))
+        assertTrue(sentText(t).endsWith("걸음수(24시간): 알 수 없음"))
+        assertEquals(listOf(300L), steps.saves)
+    }
+
+    @Test fun `이전 값이 없으면 알 수 없음이고 현재 값을 저장한다`() {
+        val t = FakeTransport(mutableListOf({ ok("{}") }))
+        val steps = StepMem(last = null, read = 4000)
+        stepSender(t, Mem(), steps).trySend(at(2026, 11, 13, 9, 1))
+        assertTrue(sentText(t).endsWith("걸음수(24시간): 알 수 없음"))
+        assertEquals(listOf(4000L), steps.saves)
+    }
+
+    @Test fun `미리보기는 전송도 저장도 하지 않는다`() {
+        val t = FakeTransport(mutableListOf())
+        val mem = Mem(LocalDate.of(2026, 11, 12))
+        val steps = StepMem(last = 1000, read = 3500)
+        val text = stepSender(t, mem, steps).previewText(at(2026, 11, 13, 9, 5))
+        assertEquals("[부모님 폰 안부 신호] 정상\n보낸 시각: 2026-11-13 09:05\n걸음수(24시간): 2,500보", text)
+        assertTrue(t.calls.isEmpty())
+        assertTrue(steps.saves.isEmpty())
+        assertEquals(LocalDate.of(2026, 11, 12), mem.last)
     }
 
     // --- 하루 1회 ---
@@ -90,7 +192,7 @@ class HeartbeatTest {
         val s = sender(t, mem)
         s.trySend(at(2026, 11, 13, 9, 1))
         assertEquals(HeartbeatOutcome.SENT_DELAYED, s.trySend(at(2026, 11, 13, 14, 20)))
-        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 14:20", sentText(t, 1))
+        assertEquals("[부모님 폰 안부 신호] 정상 (지연됨)\n보낸 시각: 2026-11-13 14:20\n걸음수(24시간): 알 수 없음", sentText(t, 1))
         assertEquals(HeartbeatOutcome.NOT_DUE, s.trySend(at(2026, 11, 13, 14, 21)))
         assertEquals(2, t.calls.size)
     }

@@ -10,6 +10,7 @@ enum class SkipReason(val text: String) {
     ROAMING_DATA("해외 로밍 중이라 모바일 데이터는 복원하지 않았습니다"),
     DAILY_LIMIT("오늘 이 항목의 자동 복원이 이미 2회라 더 되돌리지 않았습니다"),
     RUN_LIMIT("이번 점검의 수정 시도 3회를 다 써서 더 시도하지 않았습니다"),
+    DEFERRED_TOO_LONG("화면이 하루 넘게 꺼져 있어(잠금 해제 없음) 고치지 못하고 있습니다"),
 }
 
 sealed interface Decision {

@@ -52,6 +52,8 @@ class MainActivity : android.app.Activity() {
     /** 가족 영역 버튼 바로 아래 피드백 (기준 저장·다시 보내기). 맨 위 결과 카드로는 쓰지 않는다. */
     private var familyNote: ResultNote? = null
 
+    private var stepPermissionAsked = false
+
     private val store get() = AgentRuntime.store
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,7 +89,14 @@ class MainActivity : android.app.Activity() {
         resumed = true
         StatusBus.addListener(statusListener)
         render()
-        if (!store.consented) askConsent()
+        if (!store.consented) askConsent() else requestStepPermissionOnce()
+    }
+
+    /** 안부 신호의 걸음수용 권한. 이 화면이 뜬 동안 한 번만 요청한다 (거절해도 안부 신호는 걸음수 없이 나간다). */
+    private fun requestStepPermissionOnce() {
+        if (stepPermissionAsked || StepCounterReader.hasPermission(this)) return
+        stepPermissionAsked = true
+        requestPermissions(arrayOf(android.Manifest.permission.ACTIVITY_RECOGNITION), REQ_ACTIVITY_RECOGNITION)
     }
 
     override fun onPause() {
@@ -111,11 +120,12 @@ class MainActivity : android.app.Activity() {
             .setMessage(
                 "• 폰이 잘못 눌려서 바뀐 설정(비행기 모드, 와이파이, 소리, 알림, 방해금지)을 원래대로 되돌려요.\n" +
                     "• 고치기 전에 말로 먼저 알려드리고, 화면의 큰 [중단] 버튼으로 언제든 멈출 수 있어요.\n" +
+                    "• 가족에게 매일 보내는 안부 신호에 지난 하루 걸음수를 같이 알려요. 그래서 '신체 활동' 허용을 한 번 물어봐요.\n" +
                     "• 문자·통화 내용, 사진, 연락처, 비밀번호는 보지 않아요.\n" +
                     "• 못 고치면 가족에게 연락해요. 고친 기록은 이 화면에서 볼 수 있어요.",
             )
             .setCancelable(false)
-            .setPositiveButton("동의해요") { _, _ -> store.consented = true; render() }
+            .setPositiveButton("동의해요") { _, _ -> store.consented = true; render(); requestStepPermissionOnce() }
             .setNegativeButton("동의하지 않아요") { _, _ -> finish() }
             .show()
     }
@@ -466,4 +476,8 @@ class MainActivity : android.app.Activity() {
 
     private fun fmt(ms: Long) = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(Date(ms))
     private fun hm(min: Int) = "%02d:%02d".format(min / 60, min % 60)
+
+    private companion object {
+        const val REQ_ACTIVITY_RECOGNITION = 1001
+    }
 }

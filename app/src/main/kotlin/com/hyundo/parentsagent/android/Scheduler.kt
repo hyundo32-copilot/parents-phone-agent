@@ -13,7 +13,22 @@ object Scheduler {
     val SLOT_HOURS = listOf(8, 19)
     const val HEARTBEAT_HOUR = 9
     val HEARTBEAT_SLOT = SLOT_HOURS.size // 점검 슬롯 뒤 번호를 안부 신호 알람에 쓴다
+    /** 디버그 테스트 점검 전용 PendingIntent requestCode. 매일 슬롯(0..HEARTBEAT_SLOT)과 겹치지 않는다. */
+    const val TEST_SLOT = 100
     private const val EXTRA_SLOT = "slot"
+
+    /** 알람 수신 시 할 일. 매일 슬롯만 다음 날 재예약하고, 테스트 슬롯은 점검만 한다. */
+    enum class AlarmAction(val runsCheck: Boolean, val sendsHeartbeat: Boolean, val reschedulesDaily: Boolean) {
+        DAILY_CHECK(runsCheck = true, sendsHeartbeat = false, reschedulesDaily = true),
+        HEARTBEAT(runsCheck = false, sendsHeartbeat = true, reschedulesDaily = true),
+        TEST_CHECK(runsCheck = true, sendsHeartbeat = false, reschedulesDaily = false),
+    }
+
+    fun actionFor(slot: Int): AlarmAction = when (slot) {
+        TEST_SLOT -> AlarmAction.TEST_CHECK
+        HEARTBEAT_SLOT -> AlarmAction.HEARTBEAT
+        else -> AlarmAction.DAILY_CHECK
+    }
 
     fun scheduleAll(context: Context) {
         SLOT_HOURS.forEachIndexed { i, h -> schedule(context, i, h) }
@@ -30,6 +45,14 @@ object Scheduler {
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending(context, slot))
     }
 
+    /** 디버그 테스트용: 실제 예약 점검과 같은 알람 경로(setAndAllowWhileIdle → AlarmReceiver → Trigger.SCHEDULED)로 [delayMinutes]분 뒤 점검한다. 매일 알람은 건드리지 않는다. */
+    fun scheduleTestCheck(context: Context, delayMinutes: Int = 1): Long {
+        val am = context.getSystemService(AlarmManager::class.java)
+        val millis = System.currentTimeMillis() + delayMinutes * 60_000L
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending(context, TEST_SLOT))
+        return millis
+    }
+
     private fun pending(context: Context, slot: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context, slot,
@@ -43,13 +66,14 @@ object Scheduler {
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val slot = Scheduler.slotOf(intent)
-        if (slot == Scheduler.HEARTBEAT_SLOT) {
-            Scheduler.schedule(context, slot, Scheduler.HEARTBEAT_HOUR)
-            AgentRuntime.sendHeartbeatAsync(context)
-            return
+        val action = Scheduler.actionFor(slot)
+        if (action.reschedulesDaily) {
+            val hour = if (action == Scheduler.AlarmAction.HEARTBEAT) Scheduler.HEARTBEAT_HOUR
+            else Scheduler.SLOT_HOURS[slot.coerceIn(0, Scheduler.SLOT_HOURS.lastIndex)]
+            Scheduler.schedule(context, slot, hour)
         }
-        Scheduler.schedule(context, slot, Scheduler.SLOT_HOURS[slot.coerceIn(0, Scheduler.SLOT_HOURS.lastIndex)])
-        AgentRuntime.runCheckAsync(context, Trigger.SCHEDULED)
+        if (action.sendsHeartbeat) AgentRuntime.sendHeartbeatAsync(context)
+        if (action.runsCheck) AgentRuntime.runCheckAsync(context, Trigger.SCHEDULED)
     }
 }
 

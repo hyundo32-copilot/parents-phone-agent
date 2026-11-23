@@ -48,6 +48,11 @@ interface RestoreExecutor {
 interface CheckStore {
     val consented: Boolean
     var lastCheckMillis: Long
+
+    /** 잠금 해제를 기다리며 미루기 시작한 시각 (항목별). 구현이 안 저장하면 매번 비어 있다. */
+    var deferredSince: Map<SettingKey, Long>
+        get() = emptyMap()
+        set(_) {}
     fun snapshot(): Snapshot?
     fun history(): RestoreHistory
     fun saveHistory(h: RestoreHistory)

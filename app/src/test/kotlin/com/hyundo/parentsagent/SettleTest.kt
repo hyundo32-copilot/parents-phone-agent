@@ -45,6 +45,16 @@ class SettleTest {
         assertTrue(sleeper.slept.isEmpty())
     }
 
+    @Test fun `오디오용 짧은 제한 시간은 총 1초 반 이하만 기다린다`() {
+        val sleeper = RecordingSleeper()
+        val v = Settle.await(on, sequence(off), sleeper::sleep, timeoutMs = Settle.AUDIO_TIMEOUT_MS, intervalMs = Settle.AUDIO_INTERVAL_MS)
+        assertEquals(off, v)
+        assertEquals(1_500L, Settle.AUDIO_TIMEOUT_MS)
+        assertEquals(250L, Settle.AUDIO_INTERVAL_MS)
+        assertTrue(sleeper.slept.sum() <= 1_500L)
+        assertEquals(6, sleeper.slept.size)
+    }
+
     @Test fun `기본 제한 시간은 와이파이가 올라올 만큼 길다`() {
         val sleeper = RecordingSleeper()
         Settle.await(on, sequence(off), sleeper::sleep)

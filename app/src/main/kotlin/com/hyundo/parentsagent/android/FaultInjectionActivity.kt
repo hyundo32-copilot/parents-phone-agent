@@ -29,6 +29,20 @@ class FaultInjectionActivity : android.app.Activity() {
         add("무음으로 바꾸기") { injector.silent() }
         add("방해금지 켜기") { injector.dnd() }
         add("전화 앱 알림 끄기") { injector.notificationsOff() }
+        add("1분 뒤 예약 점검") {
+            val at = java.time.Instant.ofEpochMilli(Scheduler.scheduleTestCheck(this))
+                .atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
+            "1분 뒤 예약 점검이 울립니다. 화면을 꺼두고 기다리세요. (예정 $at)"
+        }
+        add("안부 신호 미리보기 (걸음수 테스트)") {
+            if (!StepCounterReader.hasPermission(this)) {
+                runOnUiThread { requestPermissions(arrayOf(android.Manifest.permission.ACTIVITY_RECOGNITION), 1) }
+                "걸음수 권한이 필요해요. 허용한 뒤 다시 눌러 주세요. (지금 미리보기는 걸음수 알 수 없음)\n\n" +
+                    AgentRuntime.heartbeat.previewText(java.time.LocalDateTime.now())
+            } else {
+                AgentRuntime.heartbeat.previewText(java.time.LocalDateTime.now())
+            }
+        }
         result = Ui.text(this, "", 20f)
         box.addView(result)
         setContentView(ScrollView(this).apply { addView(box) })
