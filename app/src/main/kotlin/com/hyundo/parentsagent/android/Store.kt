@@ -4,6 +4,7 @@ import android.content.Context
 import com.hyundo.parentsagent.core.LastCheckGrade
 import com.hyundo.parentsagent.core.LogEntry
 import com.hyundo.parentsagent.core.LogKind
+import com.hyundo.parentsagent.core.MainTab
 import com.hyundo.parentsagent.core.ResultNote
 import com.hyundo.parentsagent.core.ResultNotes
 import com.hyundo.parentsagent.core.RestoreHistory
@@ -25,6 +26,16 @@ class Store(context: Context) : CheckStore {
     var demoMode: Boolean
         get() = p.getBoolean("demoMode", false)
         set(v) = p.edit().putBoolean("demoMode", v).apply()
+
+    /** 메인 화면에서 마지막으로 고른 탭. 화면이 다시 만들어져도 유지한다. */
+    var mainTab: MainTab
+        get() = MainTab.parse(p.getString("mainTab", null))
+        set(v) = p.edit().putString("mainTab", v.name).apply()
+
+    /** 앱 안에서 직접 입력한 Liner API 키. 빌드 때 주입된 키보다 우선한다. 기기 안에만 저장한다. */
+    var linerApiKey: String
+        get() = p.getString("linerApiKey", "") ?: ""
+        set(v) = p.edit().putString("linerApiKey", v).apply()
 
     override var lastCheckMillis: Long
         get() = p.getLong("lastCheck", 0L)

@@ -107,6 +107,18 @@ class LinerTest {
         assertEquals(Symptom.OTHER, LinerClient("k", FakeTransport(mutableListOf({ ok("not json") })), RecordingSleeper()).classify("x"))
     }
 
+    @Test fun `키를 나중에 바꾸면 새 키로 동작한다`() {
+        val t = FakeTransport(mutableListOf({ chat("SMS_NOT_RECEIVED") }))
+        val c = LinerClient("", t, RecordingSleeper())
+        assertFalse(c.configured)
+        assertThrows(NotConfiguredException::class.java) { c.classify("x") }
+        assertTrue(t.calls.isEmpty())
+        c.updateKey("KEY123")
+        assertTrue(c.configured)
+        assertEquals(Symptom.SMS_NOT_RECEIVED, c.classify("문자가 안 와요"))
+        assertEquals("Bearer KEY123", t.calls[0].headers["Authorization"])
+    }
+
     @Test fun `데모 임계값`() {
         assertEquals(30, Thresholds.of(false).longCallMinutes)
         assertEquals(5, Thresholds.of(true).longCallMinutes)

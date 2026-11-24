@@ -7,9 +7,11 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -19,6 +21,7 @@ import android.widget.TextView
 import com.hyundo.parentsagent.BuildConfig
 import com.hyundo.parentsagent.core.CheckSummary
 import com.hyundo.parentsagent.core.LogPresentation
+import com.hyundo.parentsagent.core.MainTab
 import com.hyundo.parentsagent.core.ResultNote
 import com.hyundo.parentsagent.core.ResultNotes
 import com.hyundo.parentsagent.core.SpeechText
@@ -37,12 +40,13 @@ import java.util.Locale
 class MainActivity : android.app.Activity() {
     private lateinit var content: LinearLayout
     private lateinit var scroll: ScrollView
-    // 펼침 상태는 render()가 뷰를 다시 만들어도 유지한다. 저장은 안 해서 앱을 다시 켜면 닫힌 채 시작한다 (데모 모드면 펼친 채).
-    private var adminOpen = false
-    private var manageOpen = false
+    // 전체 기록 펼침 상태는 render()가 뷰를 다시 만들어도 유지한다. 저장은 안 해서 앱을 다시 켜면 닫힌 채 시작한다.
     private var logOpen = false
     private lateinit var banner: LinearLayout
     private lateinit var bannerText: TextView
+    /** 배너 바로 아래 탭 줄. 선택이 바뀌면 [renderTabBar]가 칸을 다시 만든다. 고른 탭은 Store에 저장된다. */
+    private lateinit var tabBar: LinearLayout
+    private var tab = MainTab.DEFAULT
     private val statusListener: () -> Unit = { renderBanner() }
     // Announcer는 프로세스 공유라 화면이 shutdown 하지 않는다. 화면이 시작한 발화(읽어 주기·끝 음성)만 onPause에서 멈춘다.
     private var resumed = false
@@ -51,6 +55,10 @@ class MainActivity : android.app.Activity() {
     private var checking = false
     /** 가족 영역 버튼 바로 아래 피드백 (기준 저장·다시 보내기). 맨 위 결과 카드로는 쓰지 않는다. */
     private var familyNote: ResultNote? = null
+
+    /** 관리용 Liner 키 입력·동작 확인 피드백. render()가 뷰를 다시 만들어도 유지한다. */
+    private var linerKeyNote: String? = null
+    private var linerKeyChecking = false
 
     private var stepPermissionAsked = false
 
@@ -62,6 +70,11 @@ class MainActivity : android.app.Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(Ui.SCREEN_BG))
+            // targetSdk 36은 엣지-투-엣지가 강제라 맨 위 뷰가 상태 표시줄 밑까지 그려진다. 위쪽(상태 표시줄) 인셋만 루트 위쪽 여백으로 준다.
+            setOnApplyWindowInsetsListener { v, insets ->
+                v.setPadding(v.paddingLeft, statusBarInset(insets), v.paddingRight, v.paddingBottom)
+                insets
+            }
         }
         banner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -73,22 +86,35 @@ class MainActivity : android.app.Activity() {
         banner.addView(bannerText)
         banner.addView(Ui.button(this, "중단", Ui.BAD) { StopController.request() }.apply { minimumHeight = Ui.dp(this@MainActivity, 96) })
         root.addView(banner)
+        tabBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 12), Ui.dp(this@MainActivity, 4))
+        }
+        root.addView(tabBar)
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 32))
         }
         scroll = ScrollView(this).apply { addView(content) }
         root.addView(scroll)
-        adminOpen = store.demoMode
-        manageOpen = store.demoMode
+        tab = store.mainTab
+        renderTabBar()
         setContentView(root)
     }
+
+    @Suppress("DEPRECATION")
+    private fun statusBarInset(insets: WindowInsets): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) insets.getInsets(WindowInsets.Type.statusBars()).top
+        else insets.systemWindowInsetTop
 
     override fun onResume() {
         super.onResume()
         resumed = true
         StatusBus.addListener(statusListener)
         render()
+        // 화면이 멈춰 있는 동안 점검이 끝나 idle()이 불려도 리스너가 없어 배너가 낡은 채 남는다. 돌아오면 배너를 다시 그린다.
+        // render() 안에 넣지 말 것: renderBanner()가 배너가 없을 때 render()를 부르므로 무한 반복이 된다.
+        renderBanner()
         if (!store.consented) askConsent() else requestStepPermissionOnce()
     }
 
@@ -105,6 +131,23 @@ class MainActivity : android.app.Activity() {
         ownSpeechId = null
         StatusBus.removeListener(statusListener)
         super.onPause()
+    }
+
+    private fun renderTabBar() {
+        tabBar.removeAllViews()
+        MainTab.entries.forEach { t ->
+            tabBar.addView(Ui.tabButton(this, t.label, t == tab) { selectTab(t) })
+        }
+    }
+
+    private fun selectTab(t: MainTab) {
+        if (t == tab) return
+        if (tab == MainTab.FAMILY) familyNote = null
+        tab = t
+        store.mainTab = t
+        renderTabBar()
+        scroll.scrollTo(0, 0)
+        render()
     }
 
     private fun renderBanner() {
@@ -138,19 +181,24 @@ class MainActivity : android.app.Activity() {
         val snap = store.snapshot()
         val pausedKeys = store.history().pausedKeys()
 
-        // 부모님 영역(카드별): 상태 → (데모 띠) → 권한 안내 → 큰 버튼 2개 → 할 일 안내 → 최근 고친 일 → 취침 시간
-        renderStatusCard(accOn, policyOn, snap != null, pausedKeys.size)
-        renderCheckingNotice()
-        renderResultCard()
-        renderPermissionNotice(accOn, policyOn)
-        renderActions()
-        renderTodoCards(snap != null, pausedKeys)
-        renderRecent()
-        renderSleepTime(snap)
-        // 가족·관리용 (각각 카드 안의 접힘 영역)
-        content.addView(Ui.divider(this, "아래는 가족이 관리하는 부분이에요"))
-        renderFamily(snap)
-        renderAdmin(accOn, policyOn)
+        when (tab) {
+            MainTab.PHONE_STATUS -> {
+                // 폰 상태 탭(부모님용): 상태(+데모 띠) → 점검 중 안내 → 결과 → 권한 안내 → 큰 버튼 2개 → 할 일 안내 → 최근 고친 일 → 취침 시간
+                renderStatusCard(accOn, policyOn, snap != null, pausedKeys.size)
+                renderCheckingNotice()
+                renderResultCard()
+                renderPermissionNotice(accOn, policyOn)
+                renderActions()
+                renderTodoCards(snap != null, pausedKeys)
+                renderRecent()
+                renderSleepTime(snap)
+            }
+            MainTab.FAMILY -> {
+                // 가족 관리 탭: 가족 영역(기준·다시 찍기·못 보낸 알림) → 관리용 카드(권한·기록 / 데모 / Liner 키), 모두 바로 보인다
+                renderFamily(snap)
+                renderAdmin(accOn, policyOn)
+            }
+        }
         scroll.post { scroll.scrollTo(0, scrollY) }
     }
 
@@ -234,7 +282,7 @@ class MainActivity : android.app.Activity() {
         if (!hasBaseline) {
             val card = Ui.card(this)
             card.addView(Ui.text(this, "아직 기준이 없어요", 22f, bold = true))
-            card.addView(Ui.text(this, "가족이 폰이 정상일 때 기준을 찍어 줘야 해요. 아래 [가족·관리용]에서 해요."))
+            card.addView(Ui.text(this, "가족이 폰이 정상일 때 기준을 찍어 줘야 해요. [가족 관리] 탭에서 해요."))
             content.addView(card)
         }
         if (pausedKeys.isNotEmpty()) {
@@ -267,7 +315,7 @@ class MainActivity : android.app.Activity() {
         content.addView(card)
     }
 
-    /** 가족 영역: 기준 상태, 기준 다시 찍기, 못 보낸 알림. 길게 눌러야 열린다. */
+    /** 가족 영역: 기준 상태, 기준 다시 찍기, 못 보낸 알림. 탭 자체가 가족용이라 길게 누르기 없이 바로 보인다. */
     private fun renderFamily(snap: Snapshot?) {
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val c = this
@@ -294,20 +342,14 @@ class MainActivity : android.app.Activity() {
         familyNote?.let { n ->
             body.addView(Ui.text(c, n.text, 18f, bold = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE })
         }
-        content.addView(
-            Ui.card(
-                c,
-                Ui.collapsible(
-                    c, "▸ 가족용 (길게 눌러서 열기)", "▾ 가족용 (눌러서 닫기)", adminOpen,
-                    longPressToOpen = true, onToggle = { adminOpen = it; if (!it) familyNote = null }, body = body,
-                ),
-            ),
-        )
+        content.addView(Ui.card(c, body))
     }
 
+    /** 관리용: 탭 자체가 가족용이라 접힘·길게 누르기 없이 카드로 바로 보인다 (전체 기록만 짧게 눌러 여는 접힘). */
     private fun renderAdmin(accOn: Boolean, policyOn: Boolean) {
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val c = this
+        body.addView(Ui.text(c, "관리용", 22f, bold = true))
 
         // 권한 한 줄 (꺼져 있으면 위쪽 안내 카드에 이미 나온다)
         if (accOn && policyOn) body.addView(Ui.text(c, "✔ 접근성 켜짐 · ✔ 알림 정책 켜짐", 18f))
@@ -331,9 +373,12 @@ class MainActivity : android.app.Activity() {
             Ui.collapsible(c, "▸ 전체 기록 (최근 20건)", "▾ 전체 기록 (최근 20건)", logOpen, longPressToOpen = false, onToggle = { logOpen = it }, body = logBody),
         )
 
+        content.addView(Ui.card(c, body))
+
         // 데모 / 개발
-        body.addView(Ui.text(c, "데모 설정", 22f, bold = true))
-        body.addView(
+        val demoBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        demoBody.addView(Ui.text(c, "데모 설정", 22f, bold = true))
+        demoBody.addView(
             Switch(c).apply {
                 textSize = 20f
                 isChecked = store.demoMode
@@ -342,23 +387,65 @@ class MainActivity : android.app.Activity() {
             },
         )
         // 장시간 통화 감지는 2단계. 1단계에서는 임계값을 저장·표시만 한다.
-        body.addView(Ui.text(c, "장시간 통화 기준: ${Thresholds.of(store.demoMode).longCallMinutes}분 (감지는 2단계에서 동작)", 18f))
+        demoBody.addView(Ui.text(c, "장시간 통화 기준: ${Thresholds.of(store.demoMode).longCallMinutes}분 (감지는 2단계에서 동작)", 18f))
         if (BuildConfig.DEBUG) {
-            body.addView(Ui.manageButton(c, "장애 주입 메뉴 (데모·테스트용)") {
+            demoBody.addView(Ui.manageButton(c, "장애 주입 메뉴 (데모·테스트용)") {
                 startActivity(Intent(this, FaultInjectionActivity::class.java))
             })
         }
-        body.addView(Ui.text(c, "Liner 키 ${if (AppConfig.linerApiKey.isBlank()) "없음" else "있음"} · 텔레그램 ${if (AppConfig.telegramBotToken.isBlank() || AppConfig.telegramChatId.isBlank()) "없음" else "있음"}", 14f))
+        content.addView(Ui.card(c, demoBody))
 
-        content.addView(
-            Ui.card(
-                c,
-                Ui.collapsible(
-                    c, "▸ 관리용 (길게 눌러서 열기)", "▾ 관리용 (눌러서 닫기)", manageOpen,
-                    longPressToOpen = true, onToggle = { manageOpen = it }, body = body,
-                ),
-            ),
-        )
+        val linerBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // Liner API 키 (앱 안에서 입력, 기기에만 저장한다. 빌드 때 주입된 키보다 우선한다)
+        val effectiveKey = store.linerApiKey.ifBlank { AppConfig.linerApiKey }
+        linerBody.addView(Ui.text(c, "Liner 키 ${if (effectiveKey.isBlank()) "없음" else "있음"} · 텔레그램 ${if (AppConfig.telegramBotToken.isBlank() || AppConfig.telegramChatId.isBlank()) "없음" else "있음"}", 14f))
+        linerBody.addView(Ui.text(c, "Liner API 키", 22f, bold = true))
+        val keyInput = EditText(c).apply {
+            hint = "Liner API 키를 입력하세요"
+            textSize = 18f
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(store.linerApiKey)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = Ui.dp(c, 8) }
+        }
+        linerBody.addView(keyInput)
+        linerBody.addView(Ui.manageButton(c, "저장") {
+            val key = keyInput.text.toString().trim()
+            AgentRuntime.setLinerKey(key)
+            linerKeyChecking = false
+            linerKeyNote = if (key.isBlank()) "Liner 키를 지웠어요" else "Liner 키를 저장했어요. [동작 확인]을 눌러 확인해 주세요"
+            render()
+        })
+        linerBody.addView(Ui.manageButton(c, "동작 확인") {
+            if (linerKeyChecking) return@manageButton
+            val key = keyInput.text.toString().trim()
+            if (key.isBlank()) {
+                linerKeyNote = "키를 먼저 입력해 주세요"
+                render()
+                return@manageButton
+            }
+            // 입력한 키를 저장하고, 그 키로 실제 분류 호출을 해본다
+            AgentRuntime.setLinerKey(key)
+            linerKeyChecking = true
+            linerKeyNote = null
+            render()
+            AgentRuntime.async {
+                val result = runCatching { AgentRuntime.liner.classify("문자가 안 와요") }
+                runOnUiThread {
+                    linerKeyChecking = false
+                    linerKeyNote = result.fold(
+                        onSuccess = { s -> "동작 확인됨: '${s.label}'로 분류됐어요" },
+                        onFailure = { e -> "동작 확인 실패: ${linerTestError(e)}" },
+                    )
+                    render()
+                }
+            }
+        })
+        if (linerKeyChecking) linerBody.addView(Ui.text(c, "확인하는 중이에요…", 18f))
+        linerKeyNote?.let { linerBody.addView(Ui.text(c, it, 18f, bold = true)) }
+
+        content.addView(Ui.card(c, linerBody))
     }
 
     /** 멈춘 항목을 다시 켠다. 점검과 같은 실행 줄(executor)에서 해서 진행 중인 점검의 기록 저장과 엇갈리지 않게 한다. */
@@ -467,6 +554,17 @@ class MainActivity : android.app.Activity() {
         getSystemService(AccessibilityManager::class.java)
             .getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             .any { it.resolveInfo.serviceInfo.packageName == packageName }
+
+    /** 동작 확인 실패를 사람이 읽을 말로 바꾼다. 키·URL은 넣지 않는다. */
+    private fun linerTestError(e: Throwable): String = when (e) {
+        is com.hyundo.parentsagent.net.HttpStatusException -> when (e.code) {
+            401 -> "키가 틀렸어요 (HTTP 401). 키를 다시 확인해 주세요"
+            429 -> "호출이 너무 많아요. 잠시 뒤 다시 해 주세요"
+            else -> "Liner가 거부했어요 (HTTP ${e.code})"
+        }
+        is java.io.IOException -> "망에 연결할 수 없어요. 와이파이·데이터를 확인해 주세요"
+        else -> "오류: ${e.message}"
+    }
 
     private fun copyAdminLog() {
         val text = LogPresentation.adminCopyText(store.log(), 20)

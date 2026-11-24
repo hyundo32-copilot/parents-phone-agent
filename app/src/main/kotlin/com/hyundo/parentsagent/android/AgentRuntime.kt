@@ -32,10 +32,13 @@ object AgentRuntime {
         store = Store(app)
         reader = SettingsReader(app)
         announcer = Announcer(app)
-        liner = LinerClient(AppConfig.linerApiKey)
+        // 앱 안에서 입력한 키가 있으면 빌드 때 주입된 키보다 우선한다.
+        liner = LinerClient(store.linerApiKey.ifBlank { AppConfig.linerApiKey })
         val telegram = TelegramClient(AppConfig.telegramBotToken, AppConfig.telegramChatId)
+        // liner를 항상 넘긴다: 키가 없을 때는 요약이 안 돼 원문을 보내고,
+        // 앱 안에서 키를 나중에 입력하면 같은 클라이언트가 바로 요약을 시작한다.
         sender = EscalationSender(
-            liner.takeIf { it.configured }, telegram, store.outbox(),
+            liner, telegram, store.outbox(),
             onPermanentError = { store.appendLog(it) },
             persistOutbox = { store.saveOutbox(it) },
         )
@@ -53,6 +56,14 @@ object AgentRuntime {
             returner = AccessibilityAppReturner,
         )
         initialized = true
+    }
+
+    /** 앱 안에서 입력한 Liner 키를 저장하고, 이미 만들어진 클라이언트에 바로 반영한다. */
+    @Synchronized
+    fun setLinerKey(key: String) {
+        if (!::store.isInitialized) return
+        store.linerApiKey = key
+        if (::liner.isInitialized) liner.updateKey(key)
     }
 
     /**

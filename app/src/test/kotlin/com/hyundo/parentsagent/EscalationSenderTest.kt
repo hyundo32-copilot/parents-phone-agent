@@ -35,6 +35,16 @@ class EscalationSenderTest {
         assertEquals(SendOutcome.SENT_RAW, EscalationSender(null, tg(tgt), Outbox()).send(raw))
     }
 
+    @Test fun `키를 나중에 입력하면 그때부터 요약한다`() {
+        val linerClient = LinerClient("", FakeTransport(mutableListOf({ chat("요약문") })), RecordingSleeper())
+        val tgt = FakeTransport(mutableListOf({ ok("{}") }, { ok("{}") }))
+        val sender = EscalationSender(linerClient, tg(tgt), Outbox())
+        assertEquals(SendOutcome.SENT_RAW, sender.send(raw))
+        linerClient.updateKey("k")
+        assertEquals(SendOutcome.SENT, sender.send(raw))
+        assertEquals("요약문", JSONObject(tgt.calls[1].body).getString("text"))
+    }
+
     @Test fun `망이 끊기면 원문을 대기열에 넣고 저장 콜백 호출`() {
         val tgt = FakeTransport(mutableListOf(netDown()))
         val outbox = Outbox()

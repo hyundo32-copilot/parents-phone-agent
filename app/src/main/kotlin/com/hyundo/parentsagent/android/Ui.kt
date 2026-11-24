@@ -112,6 +112,21 @@ object Ui {
         setOnClickListener { onClick() }
     }
 
+    /** 메인 화면 탭 한 칸. 고른 탭은 파랑 바탕·흰 글씨, 나머지는 흰 바탕·회색 테두리. 가로를 반씩 나눠 쓴다. */
+    fun tabButton(c: Context, s: String, selected: Boolean, onClick: () -> Unit) = Button(c).apply {
+        text = s
+        textSize = 22f
+        isAllCaps = false
+        setTypeface(typeface, if (selected) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        setTextColor(if (selected) Color.WHITE else Color.parseColor(GREY_TEXT))
+        background = if (selected) rounded(c, PRIMARY, radiusDp = 12) else rounded(c, "#FFFFFF", radiusDp = 12, strokeColor = GREY_STROKE)
+        minimumHeight = dp(c, 64)
+        isSelected = selected
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { marginStart = dp(c, 4); marginEnd = dp(c, 4) }
+        setOnClickListener { onClick() }
+    }
+
     /** 상태 등급의 바탕색·글씨색·기호. 노랑일 때만 검은 글씨. */
     private fun levelStyle(level: StatusLevel): Triple<String, Int, String> = when (level) {
         StatusLevel.GOOD -> Triple(OK, Color.WHITE, "✓")

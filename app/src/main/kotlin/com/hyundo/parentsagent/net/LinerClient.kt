@@ -12,13 +12,18 @@ class HttpStatusException(val code: Int, val retryAfterSec: Long? = null) : IOEx
 
 /** Liner 모델 API. 증상 분류와 에스컬레이션 요약만 한다. 조작 결정에는 쓰지 않는다. */
 class LinerClient(
-    private val apiKey: String,
+    private var apiKey: String,
     private val transport: HttpTransport = UrlConnectionTransport(),
     private val sleeper: Sleeper = ThreadSleeper,
     private val baseUrl: String = LinerRequests.BASE_URL,
     private val timeoutMs: Int = 20_000,
 ) {
     val configured: Boolean get() = apiKey.isNotBlank()
+
+    /** 앱 안에서 나중에 입력한 키로 바꾼다. 이미 만들어진 클라이언트도 바로 새 키를 쓴다. */
+    fun updateKey(key: String) {
+        apiKey = key
+    }
 
     /** 분류 실패(망·키 없음)는 예외로 알린다. 호출자는 OTHER 흐름으로 넘어간다. */
     @Throws(IOException::class)
