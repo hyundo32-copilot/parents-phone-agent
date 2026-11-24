@@ -29,10 +29,10 @@ class FaultInjectionActivity : android.app.Activity() {
         add("무음으로 바꾸기") { injector.silent() }
         add("방해금지 켜기") { injector.dnd() }
         add("전화 앱 알림 끄기") { injector.notificationsOff() }
-        add("1분 뒤 예약 점검") {
+        add("10초 뒤 예약 점검") {
             val at = java.time.Instant.ofEpochMilli(Scheduler.scheduleTestCheck(this))
                 .atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
-            "1분 뒤 예약 점검이 울립니다. 화면을 꺼두고 기다리세요. (예정 $at)"
+            "10초 뒤 예약 점검이 울립니다. 화면을 꺼두고 기다리세요. (예정 $at)"
         }
         add("안부 신호 미리보기 (걸음수 테스트)") {
             if (!StepCounterReader.hasPermission(this)) {

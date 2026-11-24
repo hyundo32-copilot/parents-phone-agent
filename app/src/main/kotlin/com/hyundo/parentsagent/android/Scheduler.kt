@@ -45,10 +45,10 @@ object Scheduler {
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending(context, slot))
     }
 
-    /** 디버그 테스트용: 실제 예약 점검과 같은 알람 경로(setAndAllowWhileIdle → AlarmReceiver → Trigger.SCHEDULED)로 [delayMinutes]분 뒤 점검한다. 매일 알람은 건드리지 않는다. */
-    fun scheduleTestCheck(context: Context, delayMinutes: Int = 1): Long {
+    /** 디버그 테스트용: 실제 예약 점검과 같은 알람 경로(setAndAllowWhileIdle → AlarmReceiver → Trigger.SCHEDULED)로 [delaySeconds]초 뒤 점검한다. 매일 알람은 건드리지 않는다. */
+    fun scheduleTestCheck(context: Context, delaySeconds: Int = 10): Long {
         val am = context.getSystemService(AlarmManager::class.java)
-        val millis = System.currentTimeMillis() + delayMinutes * 60_000L
+        val millis = System.currentTimeMillis() + delaySeconds * 1_000L
         am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending(context, TEST_SLOT))
         return millis
     }
