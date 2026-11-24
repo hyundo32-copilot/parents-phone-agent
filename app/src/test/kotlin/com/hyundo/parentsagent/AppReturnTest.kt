@@ -207,13 +207,14 @@ class AppReturnTest {
         assertEquals(ReturnStep.ARRIVED, AppReturn.decide(app, app, homes))
     }
 
-    @Test fun `점검 끝에 홈 화면이면 뒤로 가기 없이 앱을 다시 열고 REOPENED로 끝난다`() {
+    @Test fun `처음부터 홈 화면이면 뒤로 가기를 누른 적 없어 앱을 다시 열지 않는다`() {
+        // 사용자가 직접 홈으로 간 것이다. 우리가 뒤로 가기를 눌러 홈으로 간 게 아니므로 건드리지 않는다.
         var top = listOf(w(launcher))
         var reopens = 0
         var backs = 0
         val r = AppReturn.run(app, { top }, { backs++ }, {}, homes, { reopens++; top = listOf(appWin) })
-        assertEquals(ReturnReport(ReturnResult.REOPENED, 0, app), r)
-        assertEquals(1, reopens)
+        assertEquals(ReturnReport(ReturnResult.LEFT_ALONE, 0, launcher), r)
+        assertEquals(0, reopens)
         assertEquals(0, backs)
     }
 
@@ -241,10 +242,27 @@ class AppReturnTest {
     }
 
     @Test fun `앱을 다시 열어도 안 나오면 한 번만 열고 포기한다`() {
+        // 뒤로 가기를 눌러 홈으로 간 뒤 다시 열기를 시도한다 (뒤로 가기를 안 눌렀으면 다시 열지 않음).
+        var top = listOf(w("com.android.settings"))
         var reopens = 0
-        val r = AppReturn.run(app, { listOf(w(launcher)) }, {}, {}, homes, { reopens++ })
+        val r = AppReturn.run(app, { top }, { top = listOf(w(launcher)) }, {}, homes, { reopens++ })
         assertEquals(ReturnResult.GAVE_UP, r.result)
         assertEquals(1, reopens)
+        assertEquals(1, r.backs)
+        assertEquals(launcher, r.lastPackage)
+    }
+
+    @Test fun `마지막 확인에서 홈 화면이어도 뒤로 가기를 누른 적 없으면 다시 열지 않는다`() {
+        // 창을 못 읽어 5번을 다 쓴 뒤 마지막 확인에서 홈 화면이 보인다. 뒤로 가기를 누른 적이 없으므로 건드리지 않는다.
+        var reads = 0
+        var reopens = 0
+        val r = AppReturn.run(app, {
+            reads++
+            if (reads <= AppReturn.MAX_ATTEMPTS) emptyList() else listOf(w(launcher))
+        }, {}, {}, homes, { reopens++ })
+        assertEquals(ReturnResult.LEFT_ALONE, r.result)
+        assertEquals(0, reopens)
+        assertEquals(0, r.backs)
         assertEquals(launcher, r.lastPackage)
     }
 

@@ -15,8 +15,9 @@ enum class ReturnStep {
     RETRY,
 
     /**
-     * 홈 화면(런처)이 맨 위다. 다른 앱으로 간 게 아니라 뒤로 가기가 설정 백스택을 다 쓰고 앱 화면까지 닫은 것이다
+     * 홈 화면(런처)이 맨 위다. 우리가 뒤로 가기를 눌러 설정 백스택을 다 쓴 뒤 앱 화면까지 닫은 것이다
      * (낡은 창 목록을 보고 한 번 더 누른 경우 등). 뒤로 가기로는 못 돌아오므로 앱을 다시 연다.
+     * 단, 뒤로 가기를 한 번도 누르지 않았으면 사용자가 직접 홈으로 간 것이므로 다시 열지 않는다.
      */
     REOPEN_APP,
 }
@@ -101,7 +102,8 @@ object AppReturn {
      * 최대 [MAX_ATTEMPTS]번만 돈다. 매번 [readWindows]로 새로 읽어 판정하므로 이미 앱이면 뒤로 가기를 누르지 않는다.
      * 뒤로 가기를 누른 뒤에는 창 목록이 바뀔 때까지 [POLL_MS] 간격으로 최대 [MAX_POLLS]번 보고,
      * 바뀌었으면 [SETTLE_MS] 더 쉰다. 안 바뀌어도 시도 횟수만 쓰고 넘어간다.
-     * 홈 화면([homePackages])이 맨 위면 [reopenApp]으로 앱을 한 번 다시 연다.
+     * 홈 화면([homePackages])이 맨 위인데 우리가 뒤로 가기를 한 번이라도 눌렀으면 [reopenApp]으로 앱을 한 번 다시 연다.
+     * 뒤로 가기를 누른 적 없으면 사용자가 직접 홈으로 간 것이므로 건드리지 않는다.
      */
     fun run(
         appPackage: String,
@@ -126,7 +128,11 @@ object AppReturn {
             when (decide(topPackage(before), appPackage, homePackages)) {
                 ReturnStep.ARRIVED -> return ReturnReport(ReturnResult.ARRIVED, backs, last)
                 ReturnStep.LEAVE_ALONE -> return ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
-                ReturnStep.REOPEN_APP -> return reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
+                ReturnStep.REOPEN_APP -> if (backs > 0) {
+                    return reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
+                } else {
+                    return ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
+                }
                 ReturnStep.PRESS_BACK -> {
                     pressBack(); backs++
                     var changed = false
@@ -147,7 +153,11 @@ object AppReturn {
         return when (decide(finalTop, appPackage, homePackages)) {
             ReturnStep.ARRIVED -> ReturnReport(ReturnResult.ARRIVED, backs, last)
             ReturnStep.LEAVE_ALONE -> ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
-            ReturnStep.REOPEN_APP -> reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
+            ReturnStep.REOPEN_APP -> if (backs > 0) {
+                reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
+            } else {
+                ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
+            }
             else -> ReturnReport(ReturnResult.GAVE_UP, backs, last)
         }
     }
