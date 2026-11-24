@@ -195,6 +195,82 @@ class AppReturnTest {
         assertTrue(line, line.contains("GAVE_UP") && line.contains("5") && line.contains("com.android.systemui"))
     }
 
+    // --- 홈 화면(런처): 백스택 소진과 다른 앱 구분 ---
+
+    private val launcher = "com.sec.android.app.launcher"
+    private val homes = setOf(launcher)
+
+    @Test fun `런처를 홈으로 알려 주면 다른 앱이 아니라 앱 다시 열기로 판정한다`() {
+        assertEquals(ReturnStep.REOPEN_APP, AppReturn.decide(launcher, app, homes))
+        assertEquals(ReturnStep.LEAVE_ALONE, AppReturn.decide("com.kakao.talk", app, homes))
+        assertEquals(ReturnStep.PRESS_BACK, AppReturn.decide("com.android.settings", app, homes))
+        assertEquals(ReturnStep.ARRIVED, AppReturn.decide(app, app, homes))
+    }
+
+    @Test fun `점검 끝에 홈 화면이면 뒤로 가기 없이 앱을 다시 열고 REOPENED로 끝난다`() {
+        var top = listOf(w(launcher))
+        var reopens = 0
+        var backs = 0
+        val r = AppReturn.run(app, { top }, { backs++ }, {}, homes, { reopens++; top = listOf(appWin) })
+        assertEquals(ReturnReport(ReturnResult.REOPENED, 0, app), r)
+        assertEquals(1, reopens)
+        assertEquals(0, backs)
+    }
+
+    @Test fun `뒤로 가기가 설정을 지나 앱까지 닫아 홈으로 가면 앱을 다시 연다`() {
+        // 실기 증상 재현: 설정 → (뒤로) → 홈 화면. 예전에는 여기서 LEFT_ALONE으로 끝나 홈에 머물렀다.
+        var top = listOf(w("com.android.settings"))
+        var reopens = 0
+        val r = AppReturn.run(app, { top }, { top = listOf(w(launcher)) }, {}, homes, { reopens++; top = listOf(appWin) })
+        assertEquals(ReturnResult.REOPENED, r.result)
+        assertEquals(1, r.backs)
+        assertEquals(1, reopens)
+    }
+
+    @Test fun `마지막 확인에서 홈 화면이어도 앱을 다시 연다`() {
+        val settings = listOf(w("com.android.settings"))
+        var backs = 0
+        var reopens = 0
+        var top = settings
+        val r = AppReturn.run(app, { top }, { backs++; if (backs == AppReturn.MAX_ATTEMPTS) top = listOf(w(launcher)) }, {}, homes, {
+            reopens++; top = listOf(appWin)
+        })
+        assertEquals(ReturnResult.REOPENED, r.result)
+        assertEquals(AppReturn.MAX_ATTEMPTS, r.backs)
+        assertEquals(1, reopens)
+    }
+
+    @Test fun `앱을 다시 열어도 안 나오면 한 번만 열고 포기한다`() {
+        var reopens = 0
+        val r = AppReturn.run(app, { listOf(w(launcher)) }, {}, {}, homes, { reopens++ })
+        assertEquals(ReturnResult.GAVE_UP, r.result)
+        assertEquals(1, reopens)
+        assertEquals(launcher, r.lastPackage)
+    }
+
+    @Test fun `홈 화면을 모르면 런처도 예전처럼 건드리지 않는다`() {
+        var reopens = 0
+        val r = AppReturn.run(app, { listOf(w(launcher)) }, {}, {}, emptySet(), { reopens++ })
+        assertEquals(ReturnResult.LEFT_ALONE, r.result)
+        assertEquals(0, reopens)
+    }
+
+    @Test fun `다른 앱이 맨 위면 홈을 알아도 다시 열지 않는다`() {
+        var reopens = 0
+        val r = AppReturn.run(app, { listOf(w("com.kakao.talk"), appWin) }, {}, {}, homes, { reopens++ })
+        assertEquals(ReturnResult.LEFT_ALONE, r.result)
+        assertEquals(0, reopens)
+    }
+
+    @Test fun `돌아오기 예외는 관리용 기록에 남는다`() {
+        val f = Fake()
+        val logs = mutableListOf<String>()
+        val store = object : CheckStore by f { override fun appendLog(text: String) { logs += text } }
+        val boom = object : AppReturner { override fun returnToApp() = error("창 읽기 실패") }
+        CheckRunner(store, f, f, { f }, f, f, f, f, f, { at(2026, 11, 13, 12) }, { 5_000L }, boom).run(Trigger.MANUAL)
+        assertEquals(1, logs.count { it.startsWith("앱 복귀: 오류") })
+    }
+
     // --- CheckRunner 호출 위치 ---
 
     private class FakeReturner : AppReturner {

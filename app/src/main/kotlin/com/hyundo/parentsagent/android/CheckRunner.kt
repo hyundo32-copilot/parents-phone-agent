@@ -206,7 +206,9 @@ class CheckRunner(
                 store.appendLog("점검: 모두 정상", LogKind.INFO, ParentText.NO_PROBLEM)
             }
             // 화면을 켜고 부모님이 직접 시작한 점검에서만 앱으로 돌아온다 (자동 점검은 꺼진 화면에서 앱을 앞으로 가져오면 안 된다)
-            if (trigger == Trigger.MANUAL || trigger == Trigger.SYMPTOM) runCatching { returner.returnToAppWithReport() }.getOrNull()?.let { r ->
+            if (trigger == Trigger.MANUAL || trigger == Trigger.SYMPTOM) runCatching { returner.returnToAppWithReport() }
+                .onFailure { e -> runCatching { store.appendLog("앱 복귀: 오류 (${e.javaClass.simpleName}: ${e.message})") } }
+                .getOrNull()?.let { r ->
                 runCatching { store.appendLog(r.logLine()) }
             }
             val detail = CheckSummary(

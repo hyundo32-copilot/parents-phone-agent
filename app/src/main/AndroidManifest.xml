@@ -16,6 +16,11 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- 점검 뒤 앱 복귀: 맨 위 창이 홈 화면(런처)인지 가리려고 런처 패키지를 찾는다 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
     </queries>
 
     <application

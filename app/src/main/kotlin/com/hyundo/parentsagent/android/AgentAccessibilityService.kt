@@ -5,6 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.os.SystemClock
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.PixelFormat
@@ -22,6 +24,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.hyundo.parentsagent.core.AppReturn
 import com.hyundo.parentsagent.core.ReturnReport
+import com.hyundo.parentsagent.core.ReturnResult
 import com.hyundo.parentsagent.core.WindowSnap
 import com.hyundo.parentsagent.core.SwitchAttempt
 import com.hyundo.parentsagent.core.SwitchFinder
@@ -74,7 +77,15 @@ class AgentAccessibilityService : AccessibilityService() {
         Scheduler.scheduleAll(applicationContext)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /** 마지막 창 변화 이벤트 시각 (uptime). 메인 스레드가 쓰고 점검 스레드가 읽는다. */
+    @Volatile private var lastWindowEventAt = 0L
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val type = event?.eventType ?: return
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            lastWindowEventAt = SystemClock.uptimeMillis()
+        }
+    }
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -280,12 +291,53 @@ class AgentAccessibilityService : AccessibilityService() {
      * 각 도우미의 뒤로 가기 한 번이 모자랐을 때를 위한 안전망. 우리가 연 시스템 화면이면 뒤로 가기를 눌러 앱으로 돌아오고,
      * 이미 앱이거나 다른 앱이면 건드리지 않는다. 백그라운드 스레드에서 부른다 (대기 포함, 최대 5회).
      */
-    fun returnToApp(): ReturnReport = AppReturn.run(
-        appPackage = packageName,
-        readWindows = { readWindowsTopFirst() },
-        pressBack = { performGlobalAction(GLOBAL_ACTION_BACK) },
-        sleep = { Thread.sleep(it) },
-    )
+    fun returnToApp(): ReturnReport {
+        // 도우미들(readAppNotifications 등)은 finally에서 뒤로 가기를 누르고 기다리지 않고 바로 돌아온다.
+        // 그 직후 창 목록에는 닫히는 중인 설정 창이 아직 맨 위로 남아 있어서, 그걸 보고 뒤로 가기를 또 누르면
+        // 앱 화면이 닫혀 홈 화면으로 간다. 창 변화가 가라앉은 뒤에 판정한다.
+        waitWindowsQuiet()
+        return AppReturn.run(
+            appPackage = packageName,
+            readWindows = { readWindowsTopFirst() },
+            // 우리가 누른 뒤로 가기도 전환이 끝날 때까지 기다린다 (중간 상태를 "바뀜"으로 보고 또 누르지 않게)
+            pressBack = { performGlobalAction(GLOBAL_ACTION_BACK); waitWindowsQuiet() },
+            sleep = { Thread.sleep(it) },
+            homePackages = homePackages(),
+            reopenApp = { reopenApp() },
+        )
+    }
+
+    /**
+     * 창 변화 이벤트가 [quietMs] 동안 없을 때까지 기다린다 (최대 [maxMs]). 이벤트가 notificationTimeout(200ms)만큼
+     * 늦게 올 수 있어서 부른 시점부터도 최소 [quietMs]는 기다린다.
+     */
+    private fun waitWindowsQuiet(quietMs: Long = 500, maxMs: Long = 3_000) {
+        val start = SystemClock.uptimeMillis()
+        while (true) {
+            val now = SystemClock.uptimeMillis()
+            if (now - start >= maxMs) return
+            if (now - maxOf(start, lastWindowEventAt) >= quietMs) return
+            Thread.sleep(100)
+        }
+    }
+
+    /** 이 폰의 홈 화면 앱. 못 찾을 때를 대비해 흔한 런처도 넣는다. */
+    private fun homePackages(): Set<String> {
+        val found = runCatching {
+            packageManager.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY,
+            ).mapNotNull { it.activityInfo?.packageName }
+        }.getOrDefault(emptyList())
+        // 설정 앱은 폴백 홈 액티비티(FallbackHome)를 갖고 있어 목록에 끼는데, 설정은 뒤로 가기 대상이라 뺀다
+        return (found + KNOWN_LAUNCHERS).toSet() - AppReturn.SYSTEM_PACKAGES - packageName
+    }
+
+    /** 앱 아이콘을 누른 것과 같은 인텐트로 앱을 앞으로 가져온다. 접근성 서비스는 백그라운드에서 액티비티를 열 수 있다. */
+    private fun reopenApp() {
+        val i = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        startActivity(i)
+    }
 
     /**
      * 화면에 쌓인 창을 맨 위부터. 활성 창은 빠른 설정 패널이 아닐 수 있어서 (findTile과 같은 이유) 창 목록을 본다.
@@ -337,12 +389,19 @@ class AgentAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: AgentAccessibilityService? = null
+
+        private val KNOWN_LAUNCHERS = setOf(
+            "com.sec.android.app.launcher",
+            "com.google.android.apps.nexuslauncher",
+            "com.android.launcher3",
+        )
     }
 }
 
-/** 접근성 서비스가 꺼져 있으면 돌아올 수단이 없으므로 아무것도 안 한다. */
+/** 접근성 서비스가 꺼져 있으면 돌아올 수단이 없으므로 아무것도 안 하고, 그 사실을 결과로 남긴다 (조용히 넘기지 않는다). */
 object AccessibilityAppReturner : AppReturner {
     override fun returnToApp() { returnToAppWithReport() }
 
-    override fun returnToAppWithReport(): ReturnReport? = AgentAccessibilityService.instance?.returnToApp()
+    override fun returnToAppWithReport(): ReturnReport =
+        AgentAccessibilityService.instance?.returnToApp() ?: ReturnReport(ReturnResult.NO_SERVICE, 0, null)
 }

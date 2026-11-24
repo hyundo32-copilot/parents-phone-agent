@@ -13,9 +13,16 @@ enum class ReturnStep {
 
     /** 최상위 창을 못 읽었다. 잠깐 기다렸다가 다시 본다. */
     RETRY,
+
+    /**
+     * 홈 화면(런처)이 맨 위다. 다른 앱으로 간 게 아니라 뒤로 가기가 설정 백스택을 다 쓰고 앱 화면까지 닫은 것이다
+     * (낡은 창 목록을 보고 한 번 더 누른 경우 등). 뒤로 가기로는 못 돌아오므로 앱을 다시 연다.
+     */
+    REOPEN_APP,
 }
 
-enum class ReturnResult { ARRIVED, LEFT_ALONE, GAVE_UP }
+/** [NO_SERVICE]: 접근성 서비스가 꺼져 있어 시도조차 못 했다. [REOPENED]: 홈 화면에서 앱을 다시 열어 돌아왔다. */
+enum class ReturnResult { ARRIVED, LEFT_ALONE, GAVE_UP, REOPENED, NO_SERVICE }
 
 /**
  * 화면에 떠 있는 창 하나. [pkg]는 못 읽으면 null, [heightPercent]는 화면 높이 대비 창 높이(0~100),
@@ -61,32 +68,65 @@ object AppReturn {
                 !(w.pkg == "com.android.systemui" && w.heightPercent < PANEL_MIN_HEIGHT_PERCENT)
         }?.pkg
 
-    fun decide(topPackage: String?, appPackage: String): ReturnStep = when {
+    /** [homePackages]: 이 폰의 홈 화면(런처) 패키지. 비우면 런처도 다른 앱처럼 LEAVE_ALONE으로 본다. */
+    fun decide(topPackage: String?, appPackage: String, homePackages: Set<String> = emptySet()): ReturnStep = when {
         topPackage == null -> ReturnStep.RETRY
         topPackage == appPackage -> ReturnStep.ARRIVED
         topPackage in SYSTEM_PACKAGES -> ReturnStep.PRESS_BACK
+        topPackage in homePackages -> ReturnStep.REOPEN_APP
         else -> ReturnStep.LEAVE_ALONE
+    }
+
+    /** 앱을 다시 연 뒤 앱 창이 맨 위에 오는지 [POLL_MS] 간격으로 최대 [MAX_POLLS]번 본다. */
+    private fun reopen(
+        appPackage: String,
+        backs: Int,
+        lastSeen: String?,
+        readWindows: () -> List<WindowSnap>,
+        reopenApp: () -> Unit,
+        sleep: (Long) -> Unit,
+    ): ReturnReport {
+        reopenApp()
+        var last = lastSeen
+        repeat(MAX_POLLS) {
+            sleep(POLL_MS)
+            val top = topPackage(readWindows())
+            last = top ?: last
+            if (top == appPackage) return ReturnReport(ReturnResult.REOPENED, backs, last)
+        }
+        return ReturnReport(ReturnResult.GAVE_UP, backs, last)
     }
 
     /**
      * 최대 [MAX_ATTEMPTS]번만 돈다. 매번 [readWindows]로 새로 읽어 판정하므로 이미 앱이면 뒤로 가기를 누르지 않는다.
      * 뒤로 가기를 누른 뒤에는 창 목록이 바뀔 때까지 [POLL_MS] 간격으로 최대 [MAX_POLLS]번 보고,
      * 바뀌었으면 [SETTLE_MS] 더 쉰다. 안 바뀌어도 시도 횟수만 쓰고 넘어간다.
+     * 홈 화면([homePackages])이 맨 위면 [reopenApp]으로 앱을 한 번 다시 연다.
      */
     fun run(
         appPackage: String,
         readWindows: () -> List<WindowSnap>,
         pressBack: () -> Unit,
         sleep: (Long) -> Unit,
+    ): ReturnReport = run(appPackage, readWindows, pressBack, sleep, emptySet(), {})
+
+    fun run(
+        appPackage: String,
+        readWindows: () -> List<WindowSnap>,
+        pressBack: () -> Unit,
+        sleep: (Long) -> Unit,
+        homePackages: Set<String>,
+        reopenApp: () -> Unit,
     ): ReturnReport {
         var backs = 0
         var last: String? = null
         repeat(MAX_ATTEMPTS) {
             val before = readWindows()
             last = topPackage(before) ?: last
-            when (decide(topPackage(before), appPackage)) {
+            when (decide(topPackage(before), appPackage, homePackages)) {
                 ReturnStep.ARRIVED -> return ReturnReport(ReturnResult.ARRIVED, backs, last)
                 ReturnStep.LEAVE_ALONE -> return ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
+                ReturnStep.REOPEN_APP -> return reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
                 ReturnStep.PRESS_BACK -> {
                     pressBack(); backs++
                     var changed = false
@@ -104,9 +144,10 @@ object AppReturn {
         // 마지막으로 한 번 더 보고 결과를 정한다 (마지막 뒤로 가기가 먹었을 수 있다)
         val finalTop = topPackage(readWindows())
         last = finalTop ?: last
-        return when (decide(finalTop, appPackage)) {
+        return when (decide(finalTop, appPackage, homePackages)) {
             ReturnStep.ARRIVED -> ReturnReport(ReturnResult.ARRIVED, backs, last)
             ReturnStep.LEAVE_ALONE -> ReturnReport(ReturnResult.LEFT_ALONE, backs, last)
+            ReturnStep.REOPEN_APP -> reopen(appPackage, backs, last, readWindows, reopenApp, sleep)
             else -> ReturnReport(ReturnResult.GAVE_UP, backs, last)
         }
     }
